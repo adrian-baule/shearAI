@@ -1,8 +1,27 @@
 """
-Evaluate a trained GATsig checkpoint and visualise results.
+Evaluate or run inference with a trained GATsig checkpoint.
 
-Run as a script:
-    python notebooks/analyse.py --checkpoint outputs/best.pt --data_dir data/
+Two modes:
+
+  1. evaluate  — labelled data (two files, known DST / non-DST)
+                 reports ROC-AUC, classification report, probability histogram
+
+  2. predict   — unlabelled data (one file, unknown label)
+                 outputs per-packing DST probability to a CSV
+
+Examples:
+    # Evaluate on labelled data
+    python notebooks/analyse.py evaluate \\
+        --checkpoint outputs/best.pt \\
+        --data_dir   /content/drive/MyDrive/data \\
+        --non_dst_file data1.csv --dst_file data3.csv
+
+    # Predict on a new unlabelled file
+    python notebooks/analyse.py predict \\
+        --checkpoint outputs/best.pt \\
+        --data_dir   /content/drive/MyDrive/new_data \\
+        --input_file new_experiment.csv \\
+        --output_csv predictions.csv
 """
 
 import sys, os
@@ -11,27 +30,33 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 import argparse
 import json
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 import torch
 from sklearn.metrics import roc_auc_score, confusion_matrix, classification_report
 
 from model import GATsig
-from data import PackingDataset
+from data import PackingDataset, load_dat_file, extract_packings, packing_to_tensors, SKIP, STRIDE
 
+
+# ---------------------------------------------------------------------------
+# Model loading
+# ---------------------------------------------------------------------------
 
 def load_model(checkpoint_path: str, device) -> GATsig:
+    """Load a GATsig checkpoint; reads config.json from the same directory."""
     ckpt = torch.load(checkpoint_path, map_location=device)
-    # Try to load config
     config_path = os.path.join(os.path.dirname(checkpoint_path), "config.json")
+    cfg = {}
     if os.path.exists(config_path):
         with open(config_path) as f:
             cfg = json.load(f)
-    else:
-        cfg = {}
     model = GATsig(
         n_nodes=cfg.get("n_nodes", 2000),
         fdim=cfg.get("fdim", 5),
-        newfdim=cfg.get("newfdim", 10),
+        hidden_dim=cfg.get("hidden_dim", 10),
+        n_heads=cfg.get("n_heads", 1),
+        n_layers=cfg.get("n_layers", 1),
         mconst=cfg.get("mconst", -10.0),
         alpha=cfg.get("alpha", 0.2),
     ).to(device)
@@ -40,10 +65,29 @@ def load_model(checkpoint_path: str, device) -> GATsig:
     return model
 
 
-def plot_training_log(log_path: str, out_path: str = "training_curves.png"):
+# ---------------------------------------------------------------------------
+# Inference helpers
+# ---------------------------------------------------------------------------
+
+@torch.no_grad()
+def run_inference(model, packings, device):
+    """Return DST probability for each packing (list of np arrays)."""
+    probs = []
+    for packing in packings:
+        feats, pos, rad = packing_to_tensors(packing)
+        out = model(feats.to(device), pos.to(device), rad.to(device))
+        probs.append(torch.sigmoid(out).item())
+    return np.array(probs)
+
+
+# ---------------------------------------------------------------------------
+# Plotting helpers
+# ---------------------------------------------------------------------------
+
+def plot_training_log(log_path: str, out_path: str):
     with open(log_path) as f:
         log = json.load(f)
-    epochs = [r["epoch"] for r in log]
+    epochs     = [r["epoch"]      for r in log]
     train_loss = [r["train_loss"] for r in log]
     val_loss   = [r["val_loss"]   for r in log]
     train_acc  = [r["train_acc"]  for r in log]
@@ -52,11 +96,13 @@ def plot_training_log(log_path: str, out_path: str = "training_curves.png"):
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
     ax1.plot(epochs, train_loss, label="train")
     ax1.plot(epochs, val_loss,   label="val")
-    ax1.set_xlabel("Epoch"); ax1.set_ylabel("BCE Loss"); ax1.legend(); ax1.set_title("Loss")
+    ax1.set_xlabel("Epoch"); ax1.set_ylabel("BCE Loss")
+    ax1.legend(); ax1.set_title("Loss")
 
     ax2.plot(epochs, train_acc, label="train")
     ax2.plot(epochs, val_acc,   label="val")
-    ax2.set_xlabel("Epoch"); ax2.set_ylabel("Accuracy"); ax2.legend(); ax2.set_title("Accuracy")
+    ax2.set_xlabel("Epoch"); ax2.set_ylabel("Accuracy")
+    ax2.legend(); ax2.set_title("Accuracy")
 
     plt.tight_layout()
     plt.savefig(out_path, dpi=150)
@@ -64,45 +110,31 @@ def plot_training_log(log_path: str, out_path: str = "training_curves.png"):
     plt.show()
 
 
-@torch.no_grad()
-def evaluate_dataset(model, dataset, device):
-    probs, labels = [], []
-    for feats, pos, rad, label in dataset:
-        out = model(feats.to(device), pos.to(device), rad.to(device))
-        prob = torch.sigmoid(out).item()
-        probs.append(prob)
-        labels.append(int(label.item()))
-    return np.array(probs), np.array(labels)
+# ---------------------------------------------------------------------------
+# evaluate mode
+# ---------------------------------------------------------------------------
 
-
-def main():
-    p = argparse.ArgumentParser()
-    p.add_argument("--checkpoint", required=True)
-    p.add_argument("--data_dir", required=True)
-    p.add_argument("--non_dst_file", default="phi0p752.dat")
-    p.add_argument("--dst_file", default="phi0p764.dat")
-    p.add_argument("--output_dir", default="outputs")
-    args = p.parse_args()
-
+def cmd_evaluate(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Device: {device}")
-
-    # Load model
-    model = load_model(args.checkpoint, device)
+    model  = load_model(args.checkpoint, device)
     print(f"Loaded model from {args.checkpoint}")
 
-    # Training curves
-    log_path = os.path.join(args.output_dir, "log.json")
+    log_path = os.path.join(os.path.dirname(args.checkpoint), "log.json")
     if os.path.exists(log_path):
         plot_training_log(log_path, os.path.join(args.output_dir, "training_curves.png"))
 
-    # Full evaluation
     files = [(args.non_dst_file, 0), (args.dst_file, 1)]
-    print("Loading full dataset for evaluation...")
-    dataset = PackingDataset(args.data_dir, files)
+    print("Loading labelled dataset...")
+    dataset = PackingDataset(args.data_dir, files, skip=args.skip, stride=args.stride)
 
-    probs, labels = evaluate_dataset(model, dataset, device)
-    preds = (probs > 0.5).astype(int)
+    probs, labels = [], []
+    for feats, pos, rad, label in dataset:
+        out  = model(feats.to(device), pos.to(device), rad.to(device))
+        probs.append(torch.sigmoid(out).item())
+        labels.append(int(label.item()))
+    probs  = np.array(probs)
+    labels = np.array(labels)
+    preds  = (probs > 0.5).astype(int)
 
     auc = roc_auc_score(labels, probs)
     print(f"\nROC-AUC: {auc:.4f}")
@@ -111,10 +143,10 @@ def main():
     print("Confusion Matrix:")
     print(confusion_matrix(labels, preds))
 
-    # Probability distribution plot
+    os.makedirs(args.output_dir, exist_ok=True)
     fig, ax = plt.subplots(figsize=(8, 4))
-    ax.hist(probs[labels == 0], bins=20, alpha=0.6, label="non-DST (phi=0.752)")
-    ax.hist(probs[labels == 1], bins=20, alpha=0.6, label="DST (phi=0.764)")
+    ax.hist(probs[labels == 0], bins=20, alpha=0.6, label="non-DST")
+    ax.hist(probs[labels == 1], bins=20, alpha=0.6, label="DST")
     ax.axvline(0.5, color="k", linestyle="--", label="threshold")
     ax.set_xlabel("Predicted DST probability"); ax.set_ylabel("Count")
     ax.legend(); ax.set_title(f"GATsig predictions  (AUC={auc:.3f})")
@@ -122,6 +154,79 @@ def main():
     plt.savefig(out, dpi=150)
     print(f"Saved: {out}")
     plt.show()
+
+
+# ---------------------------------------------------------------------------
+# predict mode
+# ---------------------------------------------------------------------------
+
+def cmd_predict(args):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model  = load_model(args.checkpoint, device)
+    print(f"Loaded model from {args.checkpoint}")
+
+    path = os.path.join(args.data_dir, args.input_file)
+    print(f"Loading {path} ...")
+    raw      = load_dat_file(path)
+    packings = extract_packings(raw, skip=args.skip, stride=args.stride)
+    print(f"  → {len(packings)} packings extracted")
+
+    probs = run_inference(model, packings, device)
+
+    # Packing indices in the original file (before striding)
+    packing_ids = list(range(args.skip, args.skip + len(packings) * args.stride, args.stride))
+
+    df = pd.DataFrame({
+        "packing_index": packing_ids,
+        "dst_probability": probs,
+        "predicted_dst": (probs > 0.5).astype(int),
+    })
+    os.makedirs(args.output_dir, exist_ok=True)
+    df.to_csv(args.output_csv, index=False)
+    print(f"Saved predictions to {args.output_csv}")
+    print(df.describe())
+
+    # Probability trace over time
+    fig, ax = plt.subplots(figsize=(10, 4))
+    ax.plot(packing_ids, probs, lw=1)
+    ax.axhline(0.5, color="k", linestyle="--", alpha=0.5)
+    ax.set_xlabel("Packing index (strain step)"); ax.set_ylabel("DST probability")
+    ax.set_title(f"GATsig inference — {args.input_file}")
+    out = os.path.join(args.output_dir, "prediction_trace.png")
+    plt.tight_layout()
+    plt.savefig(out, dpi=150)
+    print(f"Saved: {out}")
+    plt.show()
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def main():
+    p = argparse.ArgumentParser()
+    sub = p.add_subparsers(dest="mode", required=True)
+
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--checkpoint",  required=True, help="Path to best.pt or last.pt")
+    common.add_argument("--data_dir",    required=True, help="Directory containing data files")
+    common.add_argument("--output_dir",  default="outputs")
+    common.add_argument("--skip",        type=int, default=SKIP,   help="Burn-in packings to discard")
+    common.add_argument("--stride",      type=int, default=STRIDE, help="Keep every n-th packing")
+
+    ev = sub.add_parser("evaluate", parents=[common])
+    ev.add_argument("--non_dst_file", default="data1.csv")
+    ev.add_argument("--dst_file",     default="data3.csv")
+
+    pr = sub.add_parser("predict", parents=[common])
+    pr.add_argument("--input_file",  required=True, help="Unlabelled .csv or .dat file to analyse")
+    pr.add_argument("--output_csv",  default="predictions.csv")
+
+    args = p.parse_args()
+    if args.mode == "evaluate":
+        cmd_evaluate(args)
+    else:
+        cmd_predict(args)
 
 
 if __name__ == "__main__":
