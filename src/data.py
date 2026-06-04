@@ -18,10 +18,9 @@ Each particle row (11 columns, 0-indexed):
   col 9  : angular vel z    (ignored)
   col 10 : angle            → features[:,4]
 
-Packing selection (matching Mathematica GATsig_layer1head1.nb):
-  - i = 0..99, packing index = stride*i  → packings 0, 10, 20, …, 990
-  - No burn-in skip; `skip=0` reproduces the notebook exactly
-  - Use skip > 0 only if you want to discard early transient packings
+Packing selection:
+  - Skip the first `skip` packings (default 100, burn-in transient)
+  - Then keep every `stride`-th packing for up to `n_packings` samples
 
 Label:
   phi=0.752  (data1) → 0   (not DST)
@@ -41,9 +40,9 @@ FEATURE_COLS = [1, 4, 6, 8, 10]   # 0-indexed columns kept as node features
 POSITION_COLS = [2, 3]              # 0-indexed: pos_x, pos_z
 RADIUS_COL = 1                      # 0-indexed
 N_NODES = 2000
-SKIP = 0                            # no burn-in skip (matches Mathematica notebook)
-STRIDE = 10                         # keep every n-th packing
-N_PACKINGS = 100                    # number of packings to take (i=0..99)
+SKIP = 100                          # burn-in packings to discard
+STRIDE = 10                         # keep every n-th packing after skip
+N_PACKINGS = 100                    # max packings to take per file
 
 
 def load_dat_file(path: str) -> np.ndarray:
@@ -72,11 +71,11 @@ def extract_packings(
     n_packings: int = N_PACKINGS,
 ) -> List[np.ndarray]:
     """
-    Extract packings matching the Mathematica notebook selection:
-        for i in 0..n_packings-1: packing index = skip + stride*i
+    Extract packings from the flat data array.
 
-    skip=0, stride=10, n_packings=100 reproduces GATsig_layer1head1.nb exactly
-    (packings 0, 10, 20, …, 990).  Increase skip to discard early transients.
+    Discards the first `skip` packings (burn-in transient), then takes every
+    `stride`-th packing for up to `n_packings` samples.
+    Packing indices used: skip, skip+stride, skip+2*stride, …
     """
     packings = []
     for i in range(n_packings):
