@@ -48,6 +48,7 @@ def parse_args():
     p.add_argument("--skip",         type=int, default=100, help="Burn-in packings to discard before selection")
     p.add_argument("--stride",       type=int, default=10,  help="Take every n-th packing")
     p.add_argument("--n_packings",   type=int, default=100, help="Number of packings per file")
+    p.add_argument("--batch_size",   type=int, default=1,  help="Batch size (default 1; increase only if all packings have the same N)")
     p.add_argument("--no_amp",       action="store_true", help="Disable mixed-precision training")
     return p.parse_args()
 
@@ -58,15 +59,19 @@ def train_one_epoch(model, loader, optimizer, criterion, device, scaler):
     use_amp = scaler is not None
 
     for feats, pos, rad, labels in loader:
-        feats  = feats.squeeze(0).to(device, non_blocking=True)
-        pos    = pos.squeeze(0).to(device, non_blocking=True)
-        rad    = rad.squeeze(0).to(device, non_blocking=True)
+        # feats/pos/rad: (B, N, *); iterate over batch dimension
+        feats  = feats.to(device, non_blocking=True)
+        pos    = pos.to(device, non_blocking=True)
+        rad    = rad.to(device, non_blocking=True)
         labels = labels.to(device, non_blocking=True)
 
         optimizer.zero_grad()
+        logits = []
         with autocast(enabled=use_amp):
-            logit = model(feats, pos, rad)
-            loss  = criterion(logit.unsqueeze(0), labels)
+            for b in range(feats.shape[0]):
+                logits.append(model(feats[b], pos[b], rad[b]))
+            logits = torch.stack(logits)
+            loss   = criterion(logits, labels)
 
         if use_amp:
             scaler.scale(loss).backward()
@@ -77,7 +82,7 @@ def train_one_epoch(model, loader, optimizer, criterion, device, scaler):
             optimizer.step()
 
         total_loss += loss.item()
-        pred = (torch.sigmoid(logit.detach().float()) > 0.5).float()
+        pred = (torch.sigmoid(logits.detach().float()) > 0.5).float()
         correct += (pred == labels).sum().item()
         total += labels.numel()
 
@@ -90,16 +95,16 @@ def evaluate(model, loader, criterion, device):
     total_loss, correct, total = 0.0, 0, 0
 
     for feats, pos, rad, labels in loader:
-        feats  = feats.squeeze(0).to(device, non_blocking=True)
-        pos    = pos.squeeze(0).to(device, non_blocking=True)
-        rad    = rad.squeeze(0).to(device, non_blocking=True)
+        feats  = feats.to(device, non_blocking=True)
+        pos    = pos.to(device, non_blocking=True)
+        rad    = rad.to(device, non_blocking=True)
         labels = labels.to(device, non_blocking=True)
 
-        logit = model(feats, pos, rad)
-        loss  = criterion(logit.unsqueeze(0), labels)
+        logits = torch.stack([model(feats[b], pos[b], rad[b]) for b in range(feats.shape[0])])
+        loss   = criterion(logits, labels)
 
         total_loss += loss.item()
-        pred = (torch.sigmoid(logit.float()) > 0.5).float()
+        pred = (torch.sigmoid(logits.float()) > 0.5).float()
         correct += (pred == labels).sum().item()
         total += labels.numel()
 
@@ -129,7 +134,7 @@ def main():
         data_dir=args.data_dir,
         files=files,
         val_fraction=args.val_fraction,
-        batch_size=1,
+        batch_size=args.batch_size,
         seed=args.seed,
         skip=args.skip,
         stride=args.stride,
