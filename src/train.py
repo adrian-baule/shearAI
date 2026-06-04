@@ -2,12 +2,14 @@
 Training script for GATsig shear-jamming classifier.
 
 Usage:
-    python train.py --data_dir /path/to/data --epochs 100 --lr 0.0001
+    python src/train.py --data_dir /path/to/data --epochs 100
 
-Matches Mathematica NetTrain:
-  - LearningRate: 0.0001
-  - ValidationSet: Scaled[0.2]
-  - Binary cross-entropy (boolean labels → sigmoid output)
+GPU (Colab):
+    Automatically uses CUDA if available.  Mixed-precision (AMP) is enabled
+    by default on CUDA for ~2x speedup on T4/A100; disable with --no_amp.
+
+    In Colab, make sure the runtime is set to GPU:
+        Runtime -> Change runtime type -> T4 GPU
 """
 
 import argparse
@@ -19,6 +21,7 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.cuda.amp import GradScaler, autocast
 
 from model import GATsig
 from data import make_dataloaders
@@ -26,45 +29,54 @@ from data import make_dataloaders
 
 def parse_args():
     p = argparse.ArgumentParser(description="Train GATsig on particle packing data")
-    p.add_argument("--data_dir", type=str, required=True, help="Directory with .dat files")
-    p.add_argument("--output_dir", type=str, default="./outputs", help="Checkpoints and logs")
-    p.add_argument("--epochs", type=int, default=100)
-    p.add_argument("--lr", type=float, default=1e-4, help="Learning rate (default matches Mathematica)")
+    p.add_argument("--data_dir",     type=str, required=True, help="Directory with data files")
+    p.add_argument("--output_dir",   type=str, default="./outputs")
+    p.add_argument("--epochs",       type=int, default=100)
+    p.add_argument("--lr",           type=float, default=1e-4)
     p.add_argument("--val_fraction", type=float, default=0.2)
-    p.add_argument("--n_nodes", type=int, default=2000)
-    p.add_argument("--fdim", type=int, default=5)
-    p.add_argument("--hidden_dim", type=int, default=10, help="Hidden dim per GAT layer")
-    p.add_argument("--n_heads", type=int, default=1, help="Attention heads per layer")
-    p.add_argument("--n_layers", type=int, default=1, help="Number of stacked GAT layers")
-    p.add_argument("--mconst", type=float, default=-10.0)
-    p.add_argument("--alpha", type=float, default=0.2, help="LeakyReLU slope")
-    p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--resume", type=str, default=None, help="Path to checkpoint to resume from")
+    p.add_argument("--n_nodes",      type=int, default=2000)
+    p.add_argument("--fdim",         type=int, default=5)
+    p.add_argument("--hidden_dim",   type=int, default=10)
+    p.add_argument("--n_heads",      type=int, default=1)
+    p.add_argument("--n_layers",     type=int, default=1)
+    p.add_argument("--mconst",       type=float, default=-10.0)
+    p.add_argument("--alpha",        type=float, default=0.2)
+    p.add_argument("--seed",         type=int, default=42)
+    p.add_argument("--resume",       type=str, default=None)
     p.add_argument("--non_dst_file", type=str, default="data1.csv")
-    p.add_argument("--dst_file", type=str, default="data3.csv")
-    p.add_argument("--skip", type=int, default=100, help="Burn-in packings to discard")
-    p.add_argument("--stride", type=int, default=10, help="Keep every n-th packing after skip")
+    p.add_argument("--dst_file",     type=str, default="data3.csv")
+    p.add_argument("--skip",         type=int, default=100)
+    p.add_argument("--stride",       type=int, default=10)
+    p.add_argument("--no_amp",       action="store_true", help="Disable mixed-precision training")
     return p.parse_args()
 
 
-def train_one_epoch(model, loader, optimizer, criterion, device):
+def train_one_epoch(model, loader, optimizer, criterion, device, scaler):
     model.train()
     total_loss, correct, total = 0.0, 0, 0
+    use_amp = scaler is not None
+
     for feats, pos, rad, labels in loader:
-        # Squeeze batch dim (batch_size=1)
-        feats  = feats.squeeze(0).to(device)
-        pos    = pos.squeeze(0).to(device)
-        rad    = rad.squeeze(0).to(device)
-        labels = labels.to(device)
+        feats  = feats.squeeze(0).to(device, non_blocking=True)
+        pos    = pos.squeeze(0).to(device, non_blocking=True)
+        rad    = rad.squeeze(0).to(device, non_blocking=True)
+        labels = labels.to(device, non_blocking=True)
 
         optimizer.zero_grad()
-        logit = model(feats, pos, rad)
-        loss = criterion(logit.unsqueeze(0), labels)
-        loss.backward()
-        optimizer.step()
+        with autocast(enabled=use_amp):
+            logit = model(feats, pos, rad)
+            loss  = criterion(logit.unsqueeze(0), labels)
+
+        if use_amp:
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            optimizer.step()
 
         total_loss += loss.item()
-        pred = (torch.sigmoid(logit) > 0.5).float()
+        pred = (torch.sigmoid(logit.detach().float()) > 0.5).float()
         correct += (pred == labels).sum().item()
         total += labels.numel()
 
@@ -75,17 +87,18 @@ def train_one_epoch(model, loader, optimizer, criterion, device):
 def evaluate(model, loader, criterion, device):
     model.eval()
     total_loss, correct, total = 0.0, 0, 0
+
     for feats, pos, rad, labels in loader:
-        feats  = feats.squeeze(0).to(device)
-        pos    = pos.squeeze(0).to(device)
-        rad    = rad.squeeze(0).to(device)
-        labels = labels.to(device)
+        feats  = feats.squeeze(0).to(device, non_blocking=True)
+        pos    = pos.squeeze(0).to(device, non_blocking=True)
+        rad    = rad.squeeze(0).to(device, non_blocking=True)
+        labels = labels.to(device, non_blocking=True)
 
         logit = model(feats, pos, rad)
-        loss = criterion(logit.unsqueeze(0), labels)
+        loss  = criterion(logit.unsqueeze(0), labels)
 
         total_loss += loss.item()
-        pred = (torch.sigmoid(logit) > 0.5).float()
+        pred = (torch.sigmoid(logit.float()) > 0.5).float()
         correct += (pred == labels).sum().item()
         total += labels.numel()
 
@@ -95,13 +108,16 @@ def evaluate(model, loader, criterion, device):
 def main():
     args = parse_args()
     torch.manual_seed(args.seed)
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Device: {device}")
+    use_amp = device.type == "cuda" and not args.no_amp
+    print(f"Device: {device}  |  AMP: {use_amp}")
+    if device.type == "cuda":
+        print(f"GPU: {torch.cuda.get_device_name(0)}")
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Save config
     with open(output_dir / "config.json", "w") as f:
         json.dump(vars(args), f, indent=2)
 
@@ -130,27 +146,27 @@ def main():
     ).to(device)
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
 
-    # Optimizer & loss
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
     criterion = nn.BCEWithLogitsLoss()
+    scaler    = GradScaler() if use_amp else None
 
-    # Optionally resume
-    start_epoch = 0
+    start_epoch   = 0
     best_val_loss = float("inf")
     if args.resume:
         ckpt = torch.load(args.resume, map_location=device)
         model.load_state_dict(ckpt["model"])
         optimizer.load_state_dict(ckpt["optimizer"])
-        start_epoch = ckpt["epoch"] + 1
+        if scaler and "scaler" in ckpt:
+            scaler.load_state_dict(ckpt["scaler"])
+        start_epoch   = ckpt["epoch"] + 1
         best_val_loss = ckpt.get("best_val_loss", float("inf"))
         print(f"Resumed from epoch {start_epoch}")
 
-    # Training loop
     log = []
     for epoch in range(start_epoch, args.epochs):
         t0 = time.time()
-        train_loss, train_acc = train_one_epoch(model, train_loader, optimizer, criterion, device)
-        val_loss, val_acc = evaluate(model, val_loader, criterion, device)
+        train_loss, train_acc = train_one_epoch(model, train_loader, optimizer, criterion, device, scaler)
+        val_loss,   val_acc   = evaluate(model, val_loader, criterion, device)
         elapsed = time.time() - t0
 
         row = dict(
@@ -162,25 +178,24 @@ def main():
             time_s=round(elapsed, 1),
         )
         log.append(row)
-        print(f"Epoch {epoch:03d} | train_loss={train_loss:.4f} acc={train_acc:.3f} | "
-              f"val_loss={val_loss:.4f} acc={val_acc:.3f} | {elapsed:.1f}s")
+        print(f"Epoch {epoch:03d} | train={train_loss:.4f}/{train_acc:.3f} "
+              f"val={val_loss:.4f}/{val_acc:.3f} | {elapsed:.1f}s")
 
-        # Save checkpoint every epoch
         ckpt = {
             "epoch": epoch,
             "model": model.state_dict(),
             "optimizer": optimizer.state_dict(),
             "best_val_loss": best_val_loss,
         }
+        if scaler:
+            ckpt["scaler"] = scaler.state_dict()
         torch.save(ckpt, output_dir / "last.pt")
 
-        # Save best model
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             torch.save(ckpt, output_dir / "best.pt")
             print(f"  → New best val_loss: {best_val_loss:.4f}")
 
-        # Flush log
         with open(output_dir / "log.json", "w") as f:
             json.dump(log, f, indent=2)
 
