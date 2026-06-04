@@ -200,12 +200,12 @@ class GATsig(nn.Module):
                 all_attns.append(attn_matrices)
             else:
                 h = layer(h, A)                                          # (N, hidden_dim)
+            h = torch.sigmoid(h)                                         # nlin: matches Mathematica adoth->nlin
 
-        # Readout: global linear over all node embeddings -> sigmoid -> softmax -> dot
-        # Matches Mathematica: W2 flattens (N, hidden_dim) -> N, then nlin2/W3/softmax2/dotprob
-        node_scores = torch.sigmoid(self.W2(h.flatten()))                # (N,)
-        weights     = F.softmax(self.W3(node_scores), dim=0)             # (N,)
-        scalar      = (weights * node_scores).sum()                      # scalar
+        # Readout: W2 flattens (N, hidden_dim) -> N, then nlin2/W3/softmax2/dotprob
+        node_scores = torch.sigmoid(self.W2(h.flatten()))                # nlin2: (N,)
+        weights     = F.softmax(self.W3(node_scores), dim=0)             # softmax2: (N,)
+        scalar      = (weights * node_scores).sum()                      # dotprob: scalar
 
         if return_attention:
             return scalar, all_attns
