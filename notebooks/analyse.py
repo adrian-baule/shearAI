@@ -200,6 +200,79 @@ def cmd_predict(args):
 
 
 # ---------------------------------------------------------------------------
+# attention mode
+# ---------------------------------------------------------------------------
+
+@torch.no_grad()
+def cmd_attention(args):
+    """
+    Extract non-zero attention weights for a single selected packing and
+    write them to alphaweights.dat.
+
+    Output format (whitespace-separated):
+        node_i  node_j  alpha_L0H0  alpha_L0H1 ...  alpha_L1H0 ...
+
+    One row per directed contact edge (i -> j) where at least one alpha > threshold.
+    node_i is the source (aggregating) node, node_j is the neighbour it attends to.
+    """
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model  = load_model(args.checkpoint, device)
+    print(f"Loaded model from {args.checkpoint}")
+
+    path = os.path.join(args.data_dir, args.input_file)
+    print(f"Loading {path} ...")
+    raw      = load_dat_file(path)
+    packings = extract_packings(raw, skip=args.skip, stride=args.stride)
+    total    = len(packings)
+    print(f"  → {total} packings available (indices 0 .. {total - 1})")
+
+    idx = args.packing_index
+    if idx < 0 or idx >= total:
+        raise ValueError(f"--packing_index {idx} out of range [0, {total - 1}]")
+
+    packing = packings[idx]
+    feats, pos, rad = packing_to_tensors(packing)
+    print(f"Running inference on packing {idx} ...")
+
+    _, all_attns = model(
+        feats.to(device), pos.to(device), rad.to(device),
+        return_attention=True,
+    )
+    # all_attns: list[layer] of list[head] of (N, N) tensors
+
+    N = feats.shape[0]
+    n_layers = len(all_attns)
+    n_heads  = len(all_attns[0])
+
+    # Build column header names: L{l}H{k} for each layer/head combination
+    head_names = [f"L{l}H{k}" for l in range(n_layers) for k in range(n_heads)]
+
+    # Stack all alpha values into (N, N, n_layers*n_heads) numpy array
+    alpha_stack = np.stack(
+        [all_attns[l][k].cpu().numpy() for l in range(n_layers) for k in range(n_heads)],
+        axis=-1,
+    )  # (N, N, n_cols)
+
+    # Keep only edges where max alpha across heads/layers exceeds threshold
+    max_alpha = alpha_stack.max(axis=-1)                        # (N, N)
+    i_idx, j_idx = np.where(max_alpha > args.threshold)
+
+    if len(i_idx) == 0:
+        print(f"No edges exceed threshold {args.threshold}. Try lowering --threshold.")
+        return
+
+    rows = np.column_stack([i_idx, j_idx, alpha_stack[i_idx, j_idx]])  # (E, 2 + n_cols)
+
+    os.makedirs(args.output_dir, exist_ok=True)
+    out_path = os.path.join(args.output_dir, args.output_file)
+
+    header = "node_i  node_j  " + "  ".join(head_names)
+    np.savetxt(out_path, rows, fmt="%d %d" + " %.6f" * len(head_names), header=header)
+    print(f"Saved {len(i_idx)} contact edges to {out_path}")
+    print(f"  Columns: node_i, node_j, {', '.join(head_names)}")
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -222,11 +295,19 @@ def main():
     pr.add_argument("--input_file",  required=True, help="Unlabelled .csv or .dat file to analyse")
     pr.add_argument("--output_csv",  default="predictions.csv")
 
+    at = sub.add_parser("attention", parents=[common])
+    at.add_argument("--input_file",     required=True, help=".csv or .dat file to inspect")
+    at.add_argument("--packing_index",  type=int, default=0, help="Which packing to inspect (0-based after skip/stride)")
+    at.add_argument("--threshold",      type=float, default=1e-3, help="Min alpha to include an edge")
+    at.add_argument("--output_file",    default="alphaweights.dat")
+
     args = p.parse_args()
     if args.mode == "evaluate":
         cmd_evaluate(args)
-    else:
+    elif args.mode == "predict":
         cmd_predict(args)
+    else:
+        cmd_attention(args)
 
 
 if __name__ == "__main__":

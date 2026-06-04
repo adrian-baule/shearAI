@@ -77,13 +77,16 @@ class GATsigLayer(nn.Module):
             nn.init.xavier_uniform_(self.a_tgt[k].unsqueeze(0))
         nn.init.xavier_uniform_(self.proj.weight)
 
-    def forward(self, x: torch.Tensor, A: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, A: torch.Tensor, return_attention: bool = False):
         """
         x : (N, in_dim)
         A : (N, N) binary contact matrix
-        returns: (N, hidden_dim)
+        return_attention : if True, also return list of (N, N) attention matrices per head
+
+        returns: (N, hidden_dim)  or  ((N, hidden_dim), list[(N, N)])
         """
         head_outputs = []
+        attn_matrices = []
         for k in range(self.n_heads):
             H = self.W[k](x)                                             # (N, head_dim)
             src_scores = (H * self.a_src[k]).sum(dim=-1)                 # (N,)
@@ -93,9 +96,14 @@ class GATsigLayer(nn.Module):
             masked = A * e + (1.0 - A) * self.mconst                     # (N, N)
             attn = torch.sigmoid(masked)                                  # (N, N)
             head_outputs.append(attn @ H)                                 # (N, head_dim)
+            if return_attention:
+                attn_matrices.append(attn)
 
         out = torch.cat(head_outputs, dim=-1)                             # (N, n_heads * head_dim)
-        return self.proj(out)                                             # (N, hidden_dim)
+        out = self.proj(out)                                              # (N, hidden_dim)
+        if return_attention:
+            return out, attn_matrices
+        return out
 
 
 class GATsig(nn.Module):
@@ -172,17 +180,31 @@ class GATsig(nn.Module):
         features: torch.Tensor,   # (N, fdim)
         positions: torch.Tensor,  # (N, 2)
         radii: torch.Tensor,      # (N,)
-    ) -> torch.Tensor:
-        """Returns scalar logit (pre-sigmoid) for DST probability."""
+        return_attention: bool = False,
+    ):
+        """
+        Returns scalar logit (pre-sigmoid) for DST probability.
+
+        If return_attention=True, also returns a list of attention matrices,
+        one per layer, each being a list of (N, N) tensors (one per head).
+        Shape: [ layer0_heads[(N,N), ...], layer1_heads[(N,N), ...], ... ]
+        """
         A = self.build_contact_matrix(positions, radii)                  # (N, N)
 
         h = features
+        all_attns = []
         for layer in self.layers:
-            h = layer(h, A)                                              # (N, hidden_dim)
+            if return_attention:
+                h, attn_matrices = layer(h, A, return_attention=True)
+                all_attns.append(attn_matrices)
+            else:
+                h = layer(h, A)                                          # (N, hidden_dim)
 
         # Readout: per-node score -> softmax weighting -> scalar
         node_scores = torch.sigmoid(self.W2(h).squeeze(-1))              # (N,)
         weights = F.softmax(self.W3(node_scores), dim=0)                 # (N,)
         scalar = (weights * node_scores).sum()                           # scalar
 
+        if return_attention:
+            return scalar, all_attns
         return scalar   # wrap in sigmoid externally for probability
