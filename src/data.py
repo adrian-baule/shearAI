@@ -1,27 +1,30 @@
 """
 Data pipeline for shear-jamming particle packing data.
 
-Raw .dat files have rows of particle data.  Each row is one particle:
-  col 0  : (ignored)
-  col 1  : particle index / type
-  col 2  : radius          → radii (also used as feature)
-  col 3  : x position      → positions[:,0]
-  col 4  : y position      → positions[:,1]
-  col 5  : feature         → features[:,1]
-  col 6  : (ignored)
-  col 7  : feature         → features[:,2]
-  col 8  : (ignored)
-  col 9  : feature         → features[:,3]
-  col 10 : (ignored)
-  col 11 : feature         → features[:,4]
+Raw .dat files interleave '#' comment lines (global header + per-packing
+metadata) with particle data rows.  np.loadtxt skips '#' lines by default,
+yielding a flat (P*N, 11) array where P is the number of packings.
 
-One "packing" = 2000 consecutive rows.
-Mathematica selects every 10th packing (i=0..99 → 100 packings per file).
+Each particle row (11 columns, 0-indexed):
+  col 0  : particle index   (ignored)
+  col 1  : radius           → radii, features[:,0]
+  col 2  : position x       → positions[:,0]
+  col 3  : position z       → positions[:,1]
+  col 4  : velocity x       → features[:,1]
+  col 5  : velocity y       (ignored)
+  col 6  : velocity z       → features[:,2]
+  col 7  : angular vel x    (ignored)
+  col 8  : angular vel y    → features[:,3]
+  col 9  : angular vel z    (ignored)
+  col 10 : angle            → features[:,4]
+
+Packing selection:
+  - Skip the first `skip` packings (default 100, i.e. burn-in transient)
+  - Then keep every `stride`-th packing (default 10)
 
 Label:
-  phi=0.752  (data1) → False / 0   (not DST)
-  phi=0.758  (data2) → False / 0   (not DST) — omitted in original
-  phi=0.764  (data3) → True  / 1   (DST)
+  phi=0.752  (data1) → 0   (not DST)
+  phi=0.764  (data3) → 1   (DST)
 """
 
 import os
@@ -32,32 +35,37 @@ from pathlib import Path
 from typing import Optional, Tuple, List
 
 
-FEATURE_COLS = [1, 4, 6, 8, 10]   # 0-indexed: cols 2,5,7,9,11 in 1-indexed Mathematica
-POSITION_COLS = [2, 3]              # 0-indexed: cols 3,4
-RADIUS_COL = 1                      # 0-indexed: col 2
+FEATURE_COLS = [1, 4, 6, 8, 10]   # 0-indexed columns kept as node features
+POSITION_COLS = [2, 3]              # 0-indexed: pos_x, pos_z
+RADIUS_COL = 1                      # 0-indexed
 N_NODES = 2000
-STRIDE = 10                         # every 10th packing
-N_PACKINGS = 100                    # 0..99
+SKIP = 100                          # burn-in packings to discard
+STRIDE = 10                         # keep every n-th packing after skip
 
 
 def load_dat_file(path: str) -> np.ndarray:
-    """Load a whitespace-separated .dat file into a numpy array."""
+    """Load .dat file; '#' comment lines are skipped automatically by np.loadtxt."""
     return np.loadtxt(path)
 
 
-def extract_packings(data: np.ndarray, n_nodes: int = N_NODES, stride: int = STRIDE, n_packings: int = N_PACKINGS) -> List[np.ndarray]:
+def extract_packings(
+    data: np.ndarray,
+    n_nodes: int = N_NODES,
+    skip: int = SKIP,
+    stride: int = STRIDE,
+) -> List[np.ndarray]:
     """
-    Extract every `stride`-th packing from raw data matrix.
-    Packing i occupies rows [i*n_nodes : (i+1)*n_nodes].
-    Returns list of (n_nodes, n_cols) arrays.
+    Extract packings from flat data array after skipping burn-in.
+
+    Discards the first `skip` packings, then returns every `stride`-th
+    packing from the remainder.  Each packing occupies `n_nodes` consecutive
+    rows in the flat array.
     """
+    total_packings = data.shape[0] // n_nodes
     packings = []
-    for i in range(n_packings):
-        start = stride * i * n_nodes
-        end = start + n_nodes
-        if end > data.shape[0]:
-            break
-        packings.append(data[start:end])
+    for i in range(skip, total_packings, stride):
+        start = i * n_nodes
+        packings.append(data[start : start + n_nodes])
     return packings
 
 
@@ -93,8 +101,8 @@ class PackingDataset(Dataset):
         data_dir: str,
         files: List[Tuple[str, int]],
         n_nodes: int = N_NODES,
+        skip: int = SKIP,
         stride: int = STRIDE,
-        n_packings: int = N_PACKINGS,
     ):
         self.samples = []  # list of (features, positions, radii, label)
 
@@ -102,7 +110,7 @@ class PackingDataset(Dataset):
             path = os.path.join(data_dir, filename)
             print(f"  Loading {filename} (label={label}) ...", flush=True)
             raw = load_dat_file(path)
-            packings = extract_packings(raw, n_nodes, stride, n_packings)
+            packings = extract_packings(raw, n_nodes, skip, stride)
             print(f"    → {len(packings)} packings extracted")
             for packing in packings:
                 feats, pos, rad = packing_to_tensors(packing)
@@ -131,7 +139,7 @@ def make_dataloaders(
     Note: batch_size=1 because each packing is a full graph (variable N,
     and the model uses N-sized weight matrices). Increase if you pad/batch graphs.
     """
-    dataset = PackingDataset(data_dir, files)
+    dataset = PackingDataset(data_dir, files, skip=SKIP, stride=STRIDE)
     total = len(dataset)
     val_size = int(total * val_fraction)
     train_size = total - val_size
