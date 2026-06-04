@@ -18,9 +18,10 @@ Each particle row (11 columns, 0-indexed):
   col 9  : angular vel z    (ignored)
   col 10 : angle            → features[:,4]
 
-Packing selection:
-  - Skip the first `skip` packings (default 100, i.e. burn-in transient)
-  - Then keep every `stride`-th packing (default 10)
+Packing selection (matching Mathematica GATsig_layer1head1.nb):
+  - i = 0..99, packing index = stride*i  → packings 0, 10, 20, …, 990
+  - No burn-in skip; `skip=0` reproduces the notebook exactly
+  - Use skip > 0 only if you want to discard early transient packings
 
 Label:
   phi=0.752  (data1) → 0   (not DST)
@@ -40,8 +41,9 @@ FEATURE_COLS = [1, 4, 6, 8, 10]   # 0-indexed columns kept as node features
 POSITION_COLS = [2, 3]              # 0-indexed: pos_x, pos_z
 RADIUS_COL = 1                      # 0-indexed
 N_NODES = 2000
-SKIP = 100                          # burn-in packings to discard
-STRIDE = 10                         # keep every n-th packing after skip
+SKIP = 0                            # no burn-in skip (matches Mathematica notebook)
+STRIDE = 10                         # keep every n-th packing
+N_PACKINGS = 100                    # number of packings to take (i=0..99)
 
 
 def load_dat_file(path: str) -> np.ndarray:
@@ -67,19 +69,23 @@ def extract_packings(
     n_nodes: int = N_NODES,
     skip: int = SKIP,
     stride: int = STRIDE,
+    n_packings: int = N_PACKINGS,
 ) -> List[np.ndarray]:
     """
-    Extract packings from flat data array after skipping burn-in.
+    Extract packings matching the Mathematica notebook selection:
+        for i in 0..n_packings-1: packing index = skip + stride*i
 
-    Discards the first `skip` packings, then returns every `stride`-th
-    packing from the remainder.  Each packing occupies `n_nodes` consecutive
-    rows in the flat array.
+    skip=0, stride=10, n_packings=100 reproduces GATsig_layer1head1.nb exactly
+    (packings 0, 10, 20, …, 990).  Increase skip to discard early transients.
     """
-    total_packings = data.shape[0] // n_nodes
     packings = []
-    for i in range(skip, total_packings, stride):
-        start = i * n_nodes
-        packings.append(data[start : start + n_nodes])
+    for i in range(n_packings):
+        packing_idx = skip + stride * i
+        start = packing_idx * n_nodes
+        end   = start + n_nodes
+        if end > data.shape[0]:
+            break
+        packings.append(data[start:end])
     return packings
 
 
@@ -117,6 +123,7 @@ class PackingDataset(Dataset):
         n_nodes: int = N_NODES,
         skip: int = SKIP,
         stride: int = STRIDE,
+        n_packings: int = N_PACKINGS,
     ):
         self.samples = []  # list of (features, positions, radii, label)
 
@@ -124,7 +131,7 @@ class PackingDataset(Dataset):
             path = os.path.join(data_dir, filename)
             print(f"  Loading {filename} (label={label}) ...", flush=True)
             raw = load_dat_file(path)
-            packings = extract_packings(raw, n_nodes, skip, stride)
+            packings = extract_packings(raw, n_nodes, skip, stride, n_packings)
             print(f"    → {len(packings)} packings extracted")
             for packing in packings:
                 feats, pos, rad = packing_to_tensors(packing)
@@ -148,6 +155,7 @@ def make_dataloaders(
     num_workers: int = 0,
     skip: int = SKIP,
     stride: int = STRIDE,
+    n_packings: int = N_PACKINGS,
 ) -> Tuple[DataLoader, DataLoader]:
     """
     Build train/val DataLoaders matching Mathematica's ValidationSet->Scaled[0.2].
@@ -155,7 +163,7 @@ def make_dataloaders(
     Note: batch_size=1 because each packing is a full graph (variable N,
     and the model uses N-sized weight matrices). Increase if you pad/batch graphs.
     """
-    dataset = PackingDataset(data_dir, files, skip=skip, stride=stride)
+    dataset = PackingDataset(data_dir, files, skip=skip, stride=stride, n_packings=n_packings)
     total = len(dataset)
     val_size = int(total * val_fraction)
     train_size = total - val_size

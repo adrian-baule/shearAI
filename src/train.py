@@ -45,8 +45,9 @@ def parse_args():
     p.add_argument("--resume",       type=str, default=None)
     p.add_argument("--non_dst_file", type=str, default="data1.csv")
     p.add_argument("--dst_file",     type=str, default="data3.csv")
-    p.add_argument("--skip",         type=int, default=100)
-    p.add_argument("--stride",       type=int, default=10)
+    p.add_argument("--skip",         type=int, default=0,   help="Packings to skip before selection (0 = matches Mathematica)")
+    p.add_argument("--stride",       type=int, default=10,  help="Take every n-th packing")
+    p.add_argument("--n_packings",   type=int, default=100, help="Number of packings per file")
     p.add_argument("--no_amp",       action="store_true", help="Disable mixed-precision training")
     return p.parse_args()
 
@@ -132,6 +133,7 @@ def main():
         seed=args.seed,
         skip=args.skip,
         stride=args.stride,
+        n_packings=args.n_packings,
     )
 
     # Model

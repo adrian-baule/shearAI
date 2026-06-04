@@ -146,8 +146,9 @@ class GATsig(nn.Module):
             for i in range(n_layers)
         ])
 
-        # Readout MLP (same structure as original)
-        self.W2 = nn.Linear(hidden_dim, 1, bias=True)
+        # Readout MLP — matches Mathematica LinearLayer[nnodes, Input->{nnodes,newfdim}]
+        # W2 flattens the full (N, hidden_dim) node matrix and maps globally to N outputs
+        self.W2 = nn.Linear(n_nodes * hidden_dim, n_nodes, bias=True)
         self.W3 = nn.Linear(n_nodes, n_nodes, bias=True)
 
         nn.init.xavier_uniform_(self.W2.weight)
@@ -200,10 +201,11 @@ class GATsig(nn.Module):
             else:
                 h = layer(h, A)                                          # (N, hidden_dim)
 
-        # Readout: per-node score -> softmax weighting -> scalar
-        node_scores = torch.sigmoid(self.W2(h).squeeze(-1))              # (N,)
-        weights = F.softmax(self.W3(node_scores), dim=0)                 # (N,)
-        scalar = (weights * node_scores).sum()                           # scalar
+        # Readout: global linear over all node embeddings -> sigmoid -> softmax -> dot
+        # Matches Mathematica: W2 flattens (N, hidden_dim) -> N, then nlin2/W3/softmax2/dotprob
+        node_scores = torch.sigmoid(self.W2(h.flatten()))                # (N,)
+        weights     = F.softmax(self.W3(node_scores), dim=0)             # (N,)
+        scalar      = (weights * node_scores).sum()                      # scalar
 
         if return_attention:
             return scalar, all_attns
