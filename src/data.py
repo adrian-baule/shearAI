@@ -29,6 +29,7 @@ Label:
 
 import os
 import numpy as np
+import pandas as pd
 import torch
 from torch.utils.data import Dataset, DataLoader, random_split
 from pathlib import Path
@@ -44,8 +45,21 @@ STRIDE = 10                         # keep every n-th packing after skip
 
 
 def load_dat_file(path: str) -> np.ndarray:
-    """Load .dat file; '#' comment lines are skipped automatically by np.loadtxt."""
-    return np.loadtxt(path)
+    """
+    Load a particle data file (.dat or .csv) into a float32 numpy array.
+
+    Handles:
+    - Whitespace-separated .dat files with '#' comment lines (LF-DEM output)
+    - Comma-separated .csv files with optional '#' comment lines or a text header
+    """
+    ext = Path(path).suffix.lower()
+    if ext == ".csv":
+        df = pd.read_csv(path, comment="#", header=None)
+        # Drop any non-numeric header row that snuck through
+        df = df.apply(pd.to_numeric, errors="coerce").dropna()
+        return df.values.astype(np.float32)
+    else:
+        return np.loadtxt(path).astype(np.float32)
 
 
 def extract_packings(
@@ -132,6 +146,8 @@ def make_dataloaders(
     batch_size: int = 1,
     seed: int = 42,
     num_workers: int = 0,
+    skip: int = SKIP,
+    stride: int = STRIDE,
 ) -> Tuple[DataLoader, DataLoader]:
     """
     Build train/val DataLoaders matching Mathematica's ValidationSet->Scaled[0.2].
@@ -139,7 +155,7 @@ def make_dataloaders(
     Note: batch_size=1 because each packing is a full graph (variable N,
     and the model uses N-sized weight matrices). Increase if you pad/batch graphs.
     """
-    dataset = PackingDataset(data_dir, files, skip=SKIP, stride=STRIDE)
+    dataset = PackingDataset(data_dir, files, skip=skip, stride=stride)
     total = len(dataset)
     val_size = int(total * val_fraction)
     train_size = total - val_size

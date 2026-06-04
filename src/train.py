@@ -33,15 +33,17 @@ def parse_args():
     p.add_argument("--val_fraction", type=float, default=0.2)
     p.add_argument("--n_nodes", type=int, default=2000)
     p.add_argument("--fdim", type=int, default=5)
-    p.add_argument("--newfdim", type=int, default=10)
+    p.add_argument("--hidden_dim", type=int, default=10, help="Hidden dim per GAT layer")
+    p.add_argument("--n_heads", type=int, default=1, help="Attention heads per layer")
+    p.add_argument("--n_layers", type=int, default=1, help="Number of stacked GAT layers")
     p.add_argument("--mconst", type=float, default=-10.0)
     p.add_argument("--alpha", type=float, default=0.2, help="LeakyReLU slope")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--resume", type=str, default=None, help="Path to checkpoint to resume from")
-    p.add_argument("--non_dst_file", type=str, default="phi0p752.dat")
-    p.add_argument("--dst_file", type=str, default="phi0p764.dat")
-    p.add_argument("--n_packings", type=int, default=100)
-    p.add_argument("--stride", type=int, default=10)
+    p.add_argument("--non_dst_file", type=str, default="data1.csv")
+    p.add_argument("--dst_file", type=str, default="data3.csv")
+    p.add_argument("--skip", type=int, default=100, help="Burn-in packings to discard")
+    p.add_argument("--stride", type=int, default=10, help="Keep every n-th packing after skip")
     return p.parse_args()
 
 
@@ -112,13 +114,17 @@ def main():
         val_fraction=args.val_fraction,
         batch_size=1,
         seed=args.seed,
+        skip=args.skip,
+        stride=args.stride,
     )
 
     # Model
     model = GATsig(
         n_nodes=args.n_nodes,
         fdim=args.fdim,
-        newfdim=args.newfdim,
+        hidden_dim=args.hidden_dim,
+        n_heads=args.n_heads,
+        n_layers=args.n_layers,
         mconst=args.mconst,
         alpha=args.alpha,
     ).to(device)
