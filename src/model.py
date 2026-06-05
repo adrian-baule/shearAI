@@ -74,8 +74,8 @@ class GATsigLayer(nn.Module):
     def _init_weights(self):
         for k in range(self.n_heads):
             nn.init.normal_(self.W[k].weight, mean=0.0, std=0.05)
-            nn.init.normal_(self.a_src[k],    mean=0.0, std=0.05)
-            nn.init.normal_(self.a_tgt[k],    mean=0.0, std=0.05)
+            nn.init.zeros_(self.a_src[k])
+            nn.init.zeros_(self.a_tgt[k])
         if self.proj is not None:
             nn.init.normal_(self.proj.weight, mean=0.0, std=0.05)
 
