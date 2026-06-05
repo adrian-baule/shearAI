@@ -65,8 +65,9 @@ class GATsigLayer(nn.Module):
             nn.Parameter(torch.empty(hidden_dim)) for _ in range(n_heads)
         ])
 
-        # Project concatenated heads back to hidden_dim
-        self.proj = nn.Linear(n_heads * hidden_dim, hidden_dim, bias=False)
+        # Multi-head projection: only added when n_heads > 1.
+        # For n_heads=1, adoth goes directly to the caller (matching Mathematica exactly).
+        self.proj = nn.Linear(n_heads * hidden_dim, hidden_dim, bias=False) if n_heads > 1 else None
 
         self._init_weights()
 
@@ -75,7 +76,8 @@ class GATsigLayer(nn.Module):
             nn.init.normal_(self.W[k].weight, mean=0.0, std=0.05)
             nn.init.normal_(self.a_src[k],    mean=0.0, std=0.05)
             nn.init.normal_(self.a_tgt[k],    mean=0.0, std=0.05)
-        nn.init.normal_(self.proj.weight, mean=0.0, std=0.05)
+        if self.proj is not None:
+            nn.init.normal_(self.proj.weight, mean=0.0, std=0.05)
 
     def forward(self, x: torch.Tensor, A: torch.Tensor, return_attention: bool = False):
         """
@@ -91,8 +93,7 @@ class GATsigLayer(nn.Module):
             H = self.W[k](x)                                             # (N, head_dim)
             src_scores = (H * self.a_src[k]).sum(dim=-1)                 # (N,) H[i]·a_src
             tgt_scores = (H * self.a_tgt[k]).sum(dim=-1)                 # (N,) H[i]·a_tgt
-            # Mathematica: left=(1,N) dotsrc, right=(N,1) dottarg
-            # outersum[i,j] = left[0,j] + right[i,0] = H[j]·a_src + H[i]·a_tgt
+            # outersum[i,j] = H[j]·a_src + H[i]·a_tgt  (matches Mathematica left/right reshape)
             e = src_scores.unsqueeze(0) + tgt_scores.unsqueeze(1)        # (N, N)
             e = F.leaky_relu(e, negative_slope=self.alpha)
             masked = A * e + (1.0 - A) * self.mconst                     # (N, N)
@@ -101,8 +102,11 @@ class GATsigLayer(nn.Module):
             if return_attention:
                 attn_matrices.append(attn)
 
-        out = torch.cat(head_outputs, dim=-1)                             # (N, n_heads * head_dim)
-        out = self.proj(out)                                              # (N, hidden_dim)
+        if self.n_heads == 1:
+            out = head_outputs[0]                                         # (N, hidden_dim) — no proj, matches Mathematica
+        else:
+            out = self.proj(torch.cat(head_outputs, dim=-1))              # (N, hidden_dim)
+
         if return_attention:
             return out, attn_matrices
         return out
