@@ -36,7 +36,7 @@ import torch
 from sklearn.metrics import roc_auc_score, confusion_matrix, classification_report
 
 from model import GATsig
-from data import PackingDataset, load_dat_file, extract_packings, packing_to_tensors, SKIP, STRIDE
+from data import PackingDataset, load_dat_file, extract_packings, packing_to_tensors
 
 
 # ---------------------------------------------------------------------------
@@ -125,7 +125,7 @@ def cmd_evaluate(args):
 
     files = [(args.non_dst_file, 0), (args.dst_file, 1)]
     print("Loading labelled dataset...")
-    dataset = PackingDataset(args.data_dir, files, skip=args.skip, stride=args.stride)
+    dataset = PackingDataset(args.data_dir, files, skip=args.skip, stride=args.stride, n_packings=10**9)
 
     probs, labels = [], []
     for feats, pos, rad, label in dataset:
@@ -168,7 +168,7 @@ def cmd_predict(args):
     path = os.path.join(args.data_dir, args.input_file)
     print(f"Loading {path} ...")
     raw      = load_dat_file(path)
-    packings = extract_packings(raw, skip=args.skip, stride=args.stride)
+    packings = extract_packings(raw, skip=args.skip, stride=args.stride, n_packings=10**9)
     print(f"  → {len(packings)} packings extracted")
 
     probs = run_inference(model, packings, device)
@@ -222,7 +222,7 @@ def cmd_attention(args):
     path = os.path.join(args.data_dir, args.input_file)
     print(f"Loading {path} ...")
     raw      = load_dat_file(path)
-    packings = extract_packings(raw, skip=args.skip, stride=args.stride)
+    packings = extract_packings(raw, skip=args.skip, stride=args.stride, n_packings=10**9)
     total    = len(packings)
     print(f"  → {total} packings available (indices 0 .. {total - 1})")
 
@@ -284,8 +284,8 @@ def main():
     common.add_argument("--checkpoint",  required=True, help="Path to best.pt or last.pt")
     common.add_argument("--data_dir",    required=True, help="Directory containing data files")
     common.add_argument("--output_dir",  default="outputs")
-    common.add_argument("--skip",        type=int, default=SKIP,   help="Burn-in packings to discard")
-    common.add_argument("--stride",      type=int, default=STRIDE, help="Keep every n-th packing")
+    common.add_argument("--skip",        type=int, default=0, help="Packings to skip at the start (default 0 = use all)")
+    common.add_argument("--stride",      type=int, default=1, help="Keep every n-th packing (default 1 = use all)")
 
     ev = sub.add_parser("evaluate", parents=[common])
     ev.add_argument("--non_dst_file", default="data1.csv")
