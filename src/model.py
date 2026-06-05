@@ -89,9 +89,11 @@ class GATsigLayer(nn.Module):
         attn_matrices = []
         for k in range(self.n_heads):
             H = self.W[k](x)                                             # (N, head_dim)
-            src_scores = (H * self.a_src[k]).sum(dim=-1)                 # (N,)
-            tgt_scores = (H * self.a_tgt[k]).sum(dim=-1)                 # (N,)
-            e = src_scores.unsqueeze(1) + tgt_scores.unsqueeze(0)        # (N, N)
+            src_scores = (H * self.a_src[k]).sum(dim=-1)                 # (N,) H[i]·a_src
+            tgt_scores = (H * self.a_tgt[k]).sum(dim=-1)                 # (N,) H[i]·a_tgt
+            # Mathematica: left=(1,N) dotsrc, right=(N,1) dottarg
+            # outersum[i,j] = left[0,j] + right[i,0] = H[j]·a_src + H[i]·a_tgt
+            e = src_scores.unsqueeze(0) + tgt_scores.unsqueeze(1)        # (N, N)
             e = F.leaky_relu(e, negative_slope=self.alpha)
             masked = A * e + (1.0 - A) * self.mconst                     # (N, N)
             attn = torch.sigmoid(masked)                                  # (N, N)
