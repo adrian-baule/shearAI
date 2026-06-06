@@ -73,11 +73,12 @@ class GATsigLayer(nn.Module):
 
     def _init_weights(self):
         for k in range(self.n_heads):
-            nn.init.normal_(self.W[k].weight, mean=0.0, std=0.05)
-            nn.init.zeros_(self.a_src[k])
-            nn.init.zeros_(self.a_tgt[k])
+            nn.init.xavier_uniform_(self.W[k].weight)
+            # 1-D vectors: unsqueeze to (1, d) so xavier_uniform_ can compute fan_in/fan_out
+            nn.init.xavier_uniform_(self.a_src[k].unsqueeze(0))
+            nn.init.xavier_uniform_(self.a_tgt[k].unsqueeze(0))
         if self.proj is not None:
-            nn.init.normal_(self.proj.weight, mean=0.0, std=0.05)
+            nn.init.xavier_uniform_(self.proj.weight)
 
     def forward(self, x: torch.Tensor, A: torch.Tensor, return_attention: bool = False):
         """
@@ -157,10 +158,10 @@ class GATsig(nn.Module):
         self.W2 = nn.Linear(n_nodes * hidden_dim, n_nodes, bias=True)
         self.W3 = nn.Linear(n_nodes, n_nodes, bias=True)
 
-        nn.init.normal_(self.W2.weight, mean=0.0, std=0.05)
-        nn.init.normal_(self.W2.bias,   mean=0.0, std=0.05)
-        nn.init.normal_(self.W3.weight, mean=0.0, std=0.05)
-        nn.init.normal_(self.W3.bias,   mean=0.0, std=0.05)
+        nn.init.xavier_uniform_(self.W2.weight)
+        nn.init.zeros_(self.W2.bias)
+        nn.init.xavier_uniform_(self.W3.weight)
+        nn.init.zeros_(self.W3.bias)
 
     # ------------------------------------------------------------------
     @staticmethod
