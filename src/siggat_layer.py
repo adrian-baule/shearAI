@@ -73,6 +73,7 @@ def compute_siggat(
     atarg:     np.ndarray,   # (hidden_dim,)
     mconst:    float = MCONST,
     alpha:     float = ALPHA,
+    verbose:   bool  = False,
 ) -> np.ndarray:
     """
     Returns the siggat attention weight matrix (N, N).
@@ -87,21 +88,34 @@ def compute_siggat(
       7. masked   = A * e + (1 - A) * mconst
       8. siggat   = sigmoid(masked)
     """
+    def _stats(name, arr):
+        a = arr.flatten()
+        print(f"  {name}: mean={a.mean():.6f}  std={a.std():.6f}  "
+              f"min={a.min():.6f}  max={a.max():.6f}  first3={a[:3]}")
+
     # 1. linear projection (no bias, matching Mathematica NetArrayLayer)
-    H = features @ W                                          # (N, hidden_dim)
+    H = features.astype(np.float64) @ W.astype(np.float64)    # (N, hidden_dim)
+    if verbose: _stats("H        ", H)
 
     # 2–3. per-node attention scalars
-    src_scores = H @ asrc                                     # (N,)
-    tgt_scores = H @ atarg                                    # (N,)
+    src_scores = H @ asrc.astype(np.float64)                   # (N,)
+    tgt_scores = H @ atarg.astype(np.float64)                  # (N,)
+    if verbose: _stats("src_scores", src_scores)
+    if verbose: _stats("tgt_scores", tgt_scores)
 
     # 4. outer sum: e[i,j] = src[j] + tgt[i]  (Mathematica left=(1,N), right=(N,1))
     e = src_scores[np.newaxis, :] + tgt_scores[:, np.newaxis]  # (N, N)
+    if verbose: _stats("e (pre-LReLU)", e)
 
     # 5. LeakyReLU
     e = np.where(e >= 0, e, alpha * e)
+    if verbose: _stats("e (post-LReLU)", e)
 
     # 6. contact matrix
     A = build_contact_matrix(positions, radii)
+    if verbose:
+        n_contacts = int(A.sum())
+        print(f"  contact pairs: {n_contacts}  (mean degree {n_contacts/A.shape[0]:.2f})")
 
     # 7. masking
     masked = A * e + (1.0 - A) * mconst
@@ -109,7 +123,11 @@ def compute_siggat(
     # 8. sigmoid
     attn = 1.0 / (1.0 + np.exp(-masked))
 
-    return attn
+    if verbose:
+        contact_w = attn[A == 1]
+        _stats("siggat (contacts)", contact_w)
+
+    return attn.astype(np.float32)
 
 
 # ── data loading helpers ──────────────────────────────────────────────────────
@@ -176,7 +194,10 @@ def parse_args():
     p.add_argument("--out_npy",      default="siggat_output.npy",
                    help="Output path for (N,N) attention matrix as .npy")
     p.add_argument("--out_csv",      default="siggat_output.csv",
-                   help="Output path for (N,N) attention matrix as .csv (for Mathematica)")
+                   help="Output path for contact-pair attention weights as .csv")
+    p.add_argument("--verbose", action="store_true",
+                   help="Print intermediate statistics (H, scores, e, contacts) "
+                        "for comparison with Mathematica")
     return p.parse_args()
 
 
@@ -202,7 +223,7 @@ def main():
     print("Computing siggat ...")
     attn = compute_siggat(
         features, positions, radii, W, asrc, atarg,
-        mconst=args.mconst, alpha=args.alpha,
+        mconst=args.mconst, alpha=args.alpha, verbose=args.verbose,
     )
     print(f"  attn shape: {attn.shape}")
 
