@@ -134,7 +134,7 @@ def compute_siggat(
         contact_w = attn[A == 1]
         _stats("siggat (contacts)", contact_w)
 
-    return attn.astype(np.float32)
+    return attn.astype(np.float32), e, masked
 
 
 # ── data loading helpers ──────────────────────────────────────────────────────
@@ -228,7 +228,7 @@ def main():
     print(f"  atarg: {atarg}")
 
     print("Computing siggat ...")
-    attn = compute_siggat(
+    attn, e_mat, masked_mat = compute_siggat(
         features, positions, radii, W, asrc, atarg,
         mconst=args.mconst, alpha=args.alpha, verbose=args.verbose,
     )
@@ -236,6 +236,8 @@ def main():
 
     # contact pairs only (non-contacts are sigmoid(-10) ≈ 0)
     A = build_contact_matrix(positions, radii)
+    rows, cols = np.where(A == 1)
+
     contact_weights = attn[A == 1]
     print(f"\nContact-pair attention weights ({len(contact_weights)} pairs):")
     print(f"  mean  = {contact_weights.mean():.4f}")
@@ -249,11 +251,21 @@ def main():
     print(f"Saved: {args.out_csv}  ({len(contact_weights)} contact-pair weights, one per line)")
 
     # contact pair indices as (i, j) — 1-indexed to match Mathematica's Position[]
-    rows, cols = np.where(A == 1)
     pairs = np.column_stack([rows + 1, cols + 1])   # convert to 1-indexed
     out_pairs = args.out_csv.replace(".csv", "_pairs.csv")
     np.savetxt(out_pairs, pairs, delimiter=",", fmt="%d")
     print(f"Saved: {out_pairs}  ({len(pairs)} contact pairs, 1-indexed i,j)")
+
+    # e and masked values at contact positions — for element-by-element comparison with Mathematica
+    e_contacts      = e_mat[rows, cols]
+    masked_contacts = masked_mat[rows, cols]
+    # save as (i_1indexed, j_1indexed, e_val, masked_val) — one row per contact edge
+    combined = np.column_stack([rows + 1, cols + 1, e_contacts, masked_contacts])
+    out_debug = args.out_csv.replace(".csv", "_debug.csv")
+    np.savetxt(out_debug, combined, delimiter=",",
+               fmt="%d,%d,%.10f,%.10f",
+               header="i,j,e_leaky,masked", comments="")
+    print(f"Saved: {out_debug}  (i,j,e_leaky,masked for each contact edge)")
 
 
 if __name__ == "__main__":
