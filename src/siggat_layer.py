@@ -123,6 +123,10 @@ def compute_siggat(
     # 7. masking
     masked = A * e + (1.0 - A) * mconst
 
+    if verbose:
+        contact_masked = masked[masked > mconst + 1.0]
+        _stats("masked (contacts)", contact_masked)
+
     # 8. sigmoid
     attn = 1.0 / (1.0 + np.exp(-masked))
 
