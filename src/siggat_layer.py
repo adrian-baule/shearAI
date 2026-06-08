@@ -244,6 +244,13 @@ def main():
     print(f"\nSaved: {args.out_npy}")
     print(f"Saved: {args.out_csv}  ({len(contact_weights)} contact-pair weights, one per line)")
 
+    # contact pair indices as (i, j) — 1-indexed to match Mathematica's Position[]
+    rows, cols = np.where(A == 1)
+    pairs = np.column_stack([rows + 1, cols + 1])   # convert to 1-indexed
+    out_pairs = args.out_csv.replace(".csv", "_pairs.csv")
+    np.savetxt(out_pairs, pairs, delimiter=",", fmt="%d")
+    print(f"Saved: {out_pairs}  ({len(pairs)} contact pairs, 1-indexed i,j)")
+
 
 if __name__ == "__main__":
     main()
