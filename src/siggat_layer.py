@@ -51,22 +51,15 @@ ALPHA         = 0.2                 # LeakyReLU negative slope
 def build_contact_matrix(
     positions: np.ndarray,
     radii:     np.ndarray,
-    box_size:  float = None,
 ) -> np.ndarray:
     """
     Binary contact matrix A[i,j] = 1 iff ||r_i - r_j|| < R_i + R_j, diagonal 0.
 
-    If box_size is given, the minimum-image convention is applied for a square
-    periodic box of side box_size (LF-DEM convention).
-
     positions : (N, 2)
     radii     : (N,)
-    box_size  : float or None
     returns   : (N, N) float64
     """
-    diff = positions[:, None, :].astype(np.float64) - positions[None, :, :].astype(np.float64)
-    if box_size is not None:
-        diff = diff - box_size * np.round(diff / box_size)   # minimum image
+    diff  = positions[:, None, :].astype(np.float64) - positions[None, :, :].astype(np.float64)
     dist  = np.sqrt((diff ** 2).sum(axis=-1))
     r_sum = radii[:, None].astype(np.float64) + radii[None, :].astype(np.float64)
     A     = (dist < r_sum).astype(np.float64)
@@ -83,7 +76,6 @@ def compute_siggat(
     atarg:     np.ndarray,   # (hidden_dim,)
     mconst:    float = MCONST,
     alpha:     float = ALPHA,
-    box_size:  float = None,
     verbose:   bool  = False,
 ) -> np.ndarray:
     """
@@ -123,11 +115,10 @@ def compute_siggat(
     if verbose: _stats("e (post-LReLU)", e)
 
     # 6. contact matrix
-    A = build_contact_matrix(positions, radii, box_size=box_size)
+    A = build_contact_matrix(positions, radii)
     if verbose:
         n_contacts = int(A.sum())
-        pbc_note = f"  [PBC box={box_size}]" if box_size else "  [no PBC]"
-        print(f"  contact pairs: {n_contacts}  (mean degree {n_contacts/A.shape[0]:.2f}){pbc_note}")
+        print(f"  contact pairs: {n_contacts}  (mean degree {n_contacts/A.shape[0]:.2f})")
 
     # 7. masking
     masked = A * e + (1.0 - A) * mconst
@@ -203,9 +194,6 @@ def parse_args():
     p.add_argument("--n_nodes",      type=int, default=N_NODES)
     p.add_argument("--mconst",       type=float, default=MCONST)
     p.add_argument("--alpha",        type=float, default=ALPHA)
-    p.add_argument("--box_size",     type=float, default=None,
-                   help="Periodic box side length for minimum-image contact detection. "
-                        "If omitted, no PBC is applied. Check your LF-DEM header for the box size.")
     p.add_argument("--out_npy",      default="siggat_output.npy",
                    help="Output path for (N,N) attention matrix as .npy")
     p.add_argument("--out_csv",      default="siggat_output.csv",
@@ -238,8 +226,7 @@ def main():
     print("Computing siggat ...")
     attn = compute_siggat(
         features, positions, radii, W, asrc, atarg,
-        mconst=args.mconst, alpha=args.alpha,
-        box_size=args.box_size, verbose=args.verbose,
+        mconst=args.mconst, alpha=args.alpha, verbose=args.verbose,
     )
     print(f"  attn shape: {attn.shape}")
 
