@@ -14,14 +14,14 @@ Usage as a script
     python src/siggat_layer.py \\
         --packing   data/phi0p752.dat \\
         --packing_idx 0 \\
-        --W         weights/W.txt \\
-        --asrc      weights/asrc.txt \\
-        --atarg     weights/atarg.txt
+        --W         weights/W.csv \\
+        --asrc      weights/asrc.csv \\
+        --atarg     weights/atarg.csv
 
-Each weight file is a plain whitespace/comma-separated text file of numbers.
-  W     : (fdim, hidden_dim) = (5, 10)  — one row per input feature
-  asrc  : (hidden_dim,)      = (10,)
-  atarg : (hidden_dim,)      = (10,)
+Weight files must be CSV exported from Mathematica via Export["file.csv", array]:
+  W     : (fdim, hidden_dim) = (5, 10)  — 5 rows x 10 cols, comma-separated
+  asrc  : (hidden_dim,)      = (10,)    — 10 rows, one value per line
+  atarg : (hidden_dim,)      = (10,)    — 10 rows, one value per line
 
 The script prints summary statistics and saves the full (N, N) attention matrix
 to siggat_output.npy (numpy) and siggat_output.csv (CSV, for Mathematica Import).
@@ -132,8 +132,16 @@ def load_packing(dat_path: str, packing_idx: int, n_nodes: int = N_NODES):
 
 
 def load_weight(path: str, shape: tuple) -> np.ndarray:
-    """Load a weight array from a whitespace- or comma-separated text file."""
-    data = np.loadtxt(path, delimiter=None, dtype=np.float64).flatten()
+    """
+    Load a weight array from a CSV file exported by Mathematica.
+
+    Mathematica Export["file.csv", matrix] convention:
+      - 2-D array (e.g. W):   rows are comma-separated, one row per line -> (rows, cols)
+      - 1-D list (e.g. asrc): one value per line, no commas            -> (n,)
+
+    Both cases are handled by loadtxt with delimiter=",".
+    """
+    data = np.loadtxt(path, delimiter=",", dtype=np.float64).flatten()
     if data.size != np.prod(shape):
         raise ValueError(
             f"{path}: expected {np.prod(shape)} values for shape {shape}, "
@@ -152,11 +160,14 @@ def parse_args():
     p.add_argument("--packing_idx",  type=int, default=0,
                    help="Which packing to use (0-indexed, default 0)")
     p.add_argument("--W",            required=True,
-                   help="Path to W weight file, shape (fdim, hidden_dim) = (5, 10)")
+                   help="CSV file for W, shape (fdim, hidden_dim) = (5, 10); "
+                        "export from Mathematica with Export[\"W.csv\", Normal@NetExtract[net, {\"W\", \"Array\"}]]")
     p.add_argument("--asrc",         required=True,
-                   help="Path to asrc weight file, shape (hidden_dim,) = (10,)")
+                   help="CSV file for asrc, shape (hidden_dim,) = (10,); "
+                        "export with Export[\"asrc.csv\", Normal@NetExtract[net, {\"asrc\", \"Array\"}]]")
     p.add_argument("--atarg",        required=True,
-                   help="Path to atarg weight file, shape (hidden_dim,) = (10,)")
+                   help="CSV file for atarg, shape (hidden_dim,) = (10,); "
+                        "export with Export[\"atarg.csv\", Normal@NetExtract[net, {\"atarg\", \"Array\"}]]")
     p.add_argument("--fdim",         type=int, default=5)
     p.add_argument("--hidden_dim",   type=int, default=10)
     p.add_argument("--n_nodes",      type=int, default=N_NODES)
