@@ -216,9 +216,9 @@ def main():
     print(f"  max   = {contact_weights.max():.4f}")
 
     np.save(args.out_npy, attn)
-    np.savetxt(args.out_csv, attn, delimiter=",", fmt="%.8f")
+    np.savetxt(args.out_csv, contact_weights, delimiter=",", fmt="%.8f")
     print(f"\nSaved: {args.out_npy}")
-    print(f"Saved: {args.out_csv}  (import in Mathematica with Import[\"{args.out_csv}\"])")
+    print(f"Saved: {args.out_csv}  ({len(contact_weights)} contact-pair weights, one per line)")
 
 
 if __name__ == "__main__":
