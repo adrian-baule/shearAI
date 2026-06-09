@@ -198,10 +198,8 @@ def parse_args():
     p.add_argument("--n_nodes",      type=int, default=N_NODES)
     p.add_argument("--mconst",       type=float, default=MCONST)
     p.add_argument("--alpha",        type=float, default=ALPHA)
-    p.add_argument("--out_npy",      default="siggat_output.npy",
-                   help="Output path for (N,N) attention matrix as .npy")
     p.add_argument("--out_csv",      default="siggat_output.csv",
-                   help="Output path for contact-pair attention weights as .csv")
+                   help="Output CSV: i,j,alpha for each contact edge")
     p.add_argument("--verbose", action="store_true",
                    help="Print intermediate statistics (H, scores, e, contacts) "
                         "for comparison with Mathematica")
@@ -245,27 +243,12 @@ def main():
     print(f"  min   = {contact_weights.min():.4f}")
     print(f"  max   = {contact_weights.max():.4f}")
 
-    np.save(args.out_npy, attn)
-    np.savetxt(args.out_csv, contact_weights, delimiter=",", fmt="%.8f")
-    print(f"\nSaved: {args.out_npy}")
-    print(f"Saved: {args.out_csv}  ({len(contact_weights)} contact-pair weights, one per line)")
-
-    # contact pair indices as (i, j) — 1-indexed to match Mathematica's Position[]
-    pairs = np.column_stack([rows + 1, cols + 1])   # convert to 1-indexed
-    out_pairs = args.out_csv.replace(".csv", "_pairs.csv")
-    np.savetxt(out_pairs, pairs, delimiter=",", fmt="%d")
-    print(f"Saved: {out_pairs}  ({len(pairs)} contact pairs, 1-indexed i,j)")
-
-    # e and masked values at contact positions — for element-by-element comparison with Mathematica
-    e_contacts      = e_mat[rows, cols]
-    masked_contacts = masked_mat[rows, cols]
-    # save as (i_1indexed, j_1indexed, e_val, masked_val) — one row per contact edge
-    combined = np.column_stack([rows + 1, cols + 1, e_contacts, masked_contacts])
-    out_debug = args.out_csv.replace(".csv", "_debug.csv")
-    np.savetxt(out_debug, combined, delimiter=",",
-               fmt="%d,%d,%.10f,%.10f",
-               header="i,j,e_leaky,masked", comments="")
-    print(f"Saved: {out_debug}  (i,j,e_leaky,masked for each contact edge)")
+    # single output: i, j (1-indexed), alpha weight
+    out = np.column_stack([rows + 1, cols + 1, contact_weights])
+    np.savetxt(args.out_csv, out, delimiter=",",
+               fmt="%d,%d,%.8f",
+               header="i,j,alpha", comments="")
+    print(f"\nSaved: {args.out_csv}  ({len(contact_weights)} contact edges, columns: i,j,alpha)")
 
 
 if __name__ == "__main__":

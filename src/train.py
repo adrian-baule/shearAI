@@ -18,6 +18,7 @@ import os
 import time
 from pathlib import Path
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -111,6 +112,17 @@ def evaluate(model, loader, criterion, device):
     return total_loss / len(loader), correct / total
 
 
+def _save_weights_csv(model: GATsig, output_dir: Path):
+    """Save W, asrc, atarg for the first GAT layer/head to CSV (Mathematica-compatible)."""
+    layer = model.layers[0]
+    W     = layer.W[0].weight.detach().cpu().numpy()       # (hidden_dim, in_dim) -> transpose to (in_dim, hidden_dim)
+    asrc  = layer.a_src[0].detach().cpu().numpy()          # (hidden_dim,)
+    atarg = layer.a_tgt[0].detach().cpu().numpy()          # (hidden_dim,)
+    np.savetxt(output_dir / "W.csv",     W.T,   delimiter=",", fmt="%.10f")   # (fdim, hidden_dim)
+    np.savetxt(output_dir / "asrc.csv",  asrc,  delimiter=",", fmt="%.10f")
+    np.savetxt(output_dir / "atarg.csv", atarg, delimiter=",", fmt="%.10f")
+
+
 def main():
     args = parse_args()
     torch.manual_seed(args.seed)
@@ -202,6 +214,7 @@ def main():
             best_val_loss = val_loss
             torch.save(ckpt, output_dir / "best.pt")
             print(f"  → New best val_loss: {best_val_loss:.4f}")
+            _save_weights_csv(model, output_dir)
 
         with open(output_dir / "log.json", "w") as f:
             json.dump(log, f, indent=2)
