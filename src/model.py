@@ -75,8 +75,8 @@ class GATsigLayer(nn.Module):
         for k in range(self.n_heads):
             nn.init.xavier_uniform_(self.W[k].weight)
             # 1-D vectors: unsqueeze to (1, d) so xavier_uniform_ can compute fan_in/fan_out
-            nn.init.zeros_(self.a_src[k])
-            nn.init.zeros_(self.a_tgt[k])
+            nn.init.xavier_uniform_(self.a_src[k].unsqueeze(0))
+            nn.init.xavier_uniform_(self.a_tgt[k].unsqueeze(0))
         if self.proj is not None:
             nn.init.xavier_uniform_(self.proj.weight)
 
