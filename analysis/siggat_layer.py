@@ -156,23 +156,17 @@ def load_packing(dat_path: str, packing_idx: int, n_nodes: int = N_NODES):
     return features, positions, radii
 
 
-def load_weight(path: str, shape: tuple) -> np.ndarray:
+def load_weight(path: str) -> np.ndarray:
     """
     Load a weight array from a CSV file exported by Mathematica.
+    Shape is inferred automatically from the file contents.
 
     Mathematica Export["file.csv", matrix] convention:
       - 2-D array (e.g. W):   rows are comma-separated, one row per line -> (rows, cols)
       - 1-D list (e.g. asrc): one value per line, no commas            -> (n,)
-
-    Both cases are handled by loadtxt with delimiter=",".
     """
-    data = np.loadtxt(path, delimiter=",", dtype=np.float64).flatten()
-    if data.size != np.prod(shape):
-        raise ValueError(
-            f"{path}: expected {np.prod(shape)} values for shape {shape}, "
-            f"got {data.size}"
-        )
-    return data.reshape(shape).astype(np.float32)
+    data = np.loadtxt(path, delimiter=",", dtype=np.float64)
+    return data.astype(np.float32)
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
@@ -185,16 +179,11 @@ def parse_args():
     p.add_argument("--packing_idx",  type=int, default=0,
                    help="Which packing to use (0-indexed, default 0)")
     p.add_argument("--W",            required=True,
-                   help="CSV file for W, shape (fdim, hidden_dim) = (5, 10); "
-                        "export from Mathematica with Export[\"W.csv\", Normal@NetExtract[net, {\"W\", \"Array\"}]]")
+                   help="CSV file for W (fdim x hidden_dim); shape inferred automatically")
     p.add_argument("--asrc",         required=True,
-                   help="CSV file for asrc, shape (hidden_dim,) = (10,); "
-                        "export with Export[\"asrc.csv\", Normal@NetExtract[net, {\"asrc\", \"Array\"}]]")
+                   help="CSV file for asrc (hidden_dim,); shape inferred automatically")
     p.add_argument("--atarg",        required=True,
-                   help="CSV file for atarg, shape (hidden_dim,) = (10,); "
-                        "export with Export[\"atarg.csv\", Normal@NetExtract[net, {\"atarg\", \"Array\"}]]")
-    p.add_argument("--fdim",         type=int, default=5)
-    p.add_argument("--hidden_dim",   type=int, default=10)
+                   help="CSV file for atarg (hidden_dim,); shape inferred automatically")
     p.add_argument("--n_nodes",      type=int, default=N_NODES)
     p.add_argument("--mconst",       type=float, default=MCONST)
     p.add_argument("--alpha",        type=float, default=ALPHA)
@@ -218,14 +207,24 @@ def main():
     print(f"  radii:     {radii.shape}")
 
     print("Loading weights ...")
-    W     = load_weight(args.W,     (args.fdim, args.hidden_dim))
-    asrc  = load_weight(args.asrc,  (args.hidden_dim,))
-    atarg = load_weight(args.atarg, (args.hidden_dim,))
-    print(f"  W:     {W.shape}  norm={np.linalg.norm(W):.4f}")
-    print(f"  asrc:  {asrc}")
-    print(f"  atarg: {atarg}")
+    W     = load_weight(args.W)
+    asrc  = load_weight(args.asrc).flatten()
+    atarg = load_weight(args.atarg).flatten()
 
-    print("Computing siggat ...")
+    # infer and validate dimensions from file shapes
+    if W.ndim != 2:
+        raise ValueError(f"W must be a 2-D matrix (fdim x hidden_dim), got shape {W.shape}")
+    fdim, hidden_dim = W.shape
+    if asrc.shape[0] != hidden_dim:
+        raise ValueError(f"asrc length {asrc.shape[0]} != W columns {hidden_dim}")
+    if atarg.shape[0] != hidden_dim:
+        raise ValueError(f"atarg length {atarg.shape[0]} != W columns {hidden_dim}")
+
+    print(f"  W:         {W.shape}  (fdim={fdim}, hidden_dim={hidden_dim})  norm={np.linalg.norm(W):.4f}")
+    print(f"  asrc:      {asrc}")
+    print(f"  atarg:     {atarg}")
+
+    print(f"Computing siggat for packing with {features.shape[0]} nodes ...")
     attn, e_mat, masked_mat = compute_siggat(
         features, positions, radii, W, asrc, atarg,
         mconst=args.mconst, alpha=args.alpha, verbose=args.verbose,
