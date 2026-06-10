@@ -243,12 +243,21 @@ def main():
     print(f"  min   = {contact_weights.min():.4f}")
     print(f"  max   = {contact_weights.max():.4f}")
 
-    # single output: i, j (1-indexed), alpha weight
-    out = np.column_stack([rows + 1, cols + 1, contact_weights])
+    # output: i, j (1-indexed), alpha, x_i, z_i, x_j, z_j, r_i, r_j
+    pos_i = positions[rows]          # (E, 2)
+    pos_j = positions[cols]          # (E, 2)
+    r_i   = radii[rows]              # (E,)
+    r_j   = radii[cols]              # (E,)
+    out = np.column_stack([
+        rows + 1, cols + 1,
+        contact_weights,
+        pos_i, pos_j,
+        r_i, r_j,
+    ])
     np.savetxt(args.out_csv, out, delimiter=",",
-               fmt="%d,%d,%.8f",
-               header="i,j,alpha", comments="")
-    print(f"\nSaved: {args.out_csv}  ({len(contact_weights)} contact edges, columns: i,j,alpha)")
+               fmt="%d,%d,%.8f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f",
+               header="i,j,alpha,x_i,z_i,x_j,z_j,r_i,r_j", comments="")
+    print(f"\nSaved: {args.out_csv}  ({len(contact_weights)} contact edges, columns: i,j,alpha,x_i,z_i,x_j,z_j,r_i,r_j)")
 
 
 if __name__ == "__main__":
