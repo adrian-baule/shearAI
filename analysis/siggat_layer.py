@@ -215,6 +215,11 @@ def main():
     if W.ndim != 2:
         raise ValueError(f"W must be a 2-D matrix (fdim x hidden_dim), got shape {W.shape}")
     fdim, hidden_dim = W.shape
+    if fdim != len(FEATURE_COLS):
+        raise ValueError(
+            f"W has {fdim} rows but packing data provides {len(FEATURE_COLS)} features "
+            f"(FEATURE_COLS={FEATURE_COLS}). Check that the correct W file is used."
+        )
     if asrc.shape[0] != hidden_dim:
         raise ValueError(f"asrc length {asrc.shape[0]} != W columns {hidden_dim}")
     if atarg.shape[0] != hidden_dim:
