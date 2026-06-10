@@ -118,9 +118,9 @@ def _save_weights_csv(model: GATsig, output_dir: Path):
     W     = layer.W[0].weight.detach().cpu().numpy()       # (hidden_dim, in_dim) -> transpose to (in_dim, hidden_dim)
     asrc  = layer.a_src[0].detach().cpu().numpy()          # (hidden_dim,)
     atarg = layer.a_tgt[0].detach().cpu().numpy()          # (hidden_dim,)
-    np.savetxt(output_dir / "W.csv",     W.T,   delimiter=",", fmt="%.10f")   # (fdim, hidden_dim)
-    np.savetxt(output_dir / "asrc.csv",  asrc,  delimiter=",", fmt="%.10f")
-    np.savetxt(output_dir / "atarg.csv", atarg, delimiter=",", fmt="%.10f")
+    np.savetxt(output_dir / "out_W.csv",     W.T,   delimiter=",", fmt="%.10f")   # (fdim, hidden_dim)
+    np.savetxt(output_dir / "out_asrc.csv",  asrc,  delimiter=",", fmt="%.10f")
+    np.savetxt(output_dir / "out_atarg.csv", atarg, delimiter=",", fmt="%.10f")
 
 
 def main():

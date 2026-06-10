@@ -14,9 +14,9 @@ Usage as a script
     python src/siggat_layer.py \\
         --packing   data/phi0p752.dat \\
         --packing_idx 0 \\
-        --W         weights/W.csv \\
-        --asrc      weights/asrc.csv \\
-        --atarg     weights/atarg.csv
+        --W         weights/out_W.csv \\
+        --asrc      weights/out_asrc.csv \\
+        --atarg     weights/out_atarg.csv
 
 Weight files must be CSV exported from Mathematica via Export["file.csv", array]:
   W     : (fdim, hidden_dim) = (5, 10)  — 5 rows x 10 cols, comma-separated
