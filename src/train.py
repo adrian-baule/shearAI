@@ -51,6 +51,8 @@ def parse_args():
     p.add_argument("--n_packings",   type=int, default=100, help="Number of packings per file")
     p.add_argument("--batch_size",   type=int, default=1,  help="Batch size (default 1; increase only if all packings have the same N)")
     p.add_argument("--no_amp",       action="store_true", help="Disable mixed-precision training")
+    p.add_argument("--patience",     type=int, default=10,
+                   help="Early stopping: stop after this many epochs with no val_loss improvement. 0 = disabled.")
     return p.parse_args()
 
 
@@ -182,6 +184,7 @@ def main():
         print(f"Resumed from epoch {start_epoch}")
 
     log = []
+    epochs_no_improve = 0
     for epoch in range(start_epoch, args.epochs):
         t0 = time.time()
         train_loss, train_acc = train_one_epoch(model, train_loader, optimizer, criterion, device, scaler)
@@ -212,12 +215,19 @@ def main():
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
+            epochs_no_improve = 0
             torch.save(ckpt, output_dir / "best.pt")
             print(f"  → New best val_loss: {best_val_loss:.4f}")
             _save_weights_csv(model, output_dir)
+        else:
+            epochs_no_improve += 1
 
         with open(output_dir / "log.json", "w") as f:
             json.dump(log, f, indent=2)
+
+        if args.patience > 0 and epochs_no_improve >= args.patience:
+            print(f"Early stopping: val_loss did not improve for {args.patience} epochs.")
+            break
 
     print("Training complete.")
     print(f"Best val_loss: {best_val_loss:.4f}")
