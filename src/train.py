@@ -40,7 +40,7 @@ def parse_args():
     p.add_argument("--hidden_dim",   type=int, default=10)
     p.add_argument("--n_heads",      type=int, default=1)
     p.add_argument("--n_layers",     type=int, default=1)
-    p.add_argument("--mconst",       type=float, default=-10.0)
+    p.add_argument("--mconst",       type=float, default=-50.0)
     p.add_argument("--alpha",        type=float, default=0.2)
     p.add_argument("--seed",         type=int, default=42)
     p.add_argument("--resume",       type=str, default=None)
@@ -200,8 +200,22 @@ def main():
             time_s=round(elapsed, 1),
         )
         log.append(row)
+        # gradient norms for a_src / a_tgt across all layers and heads
+        asrc_norms = [
+            p.grad.norm().item() for layer in model.layers
+            for p in layer.a_src if p.grad is not None
+        ]
+        atgt_norms = [
+            p.grad.norm().item() for layer in model.layers
+            for p in layer.a_tgt if p.grad is not None
+        ]
+        grad_str = ""
+        if asrc_norms:
+            grad_str = (f"  |grad| a_src={[f'{v:.4f}' for v in asrc_norms]} "
+                        f"a_tgt={[f'{v:.4f}' for v in atgt_norms]}")
+
         print(f"Epoch {epoch:03d} | train={train_loss:.4f}/{train_acc:.3f} "
-              f"val={val_loss:.4f}/{val_acc:.3f} | {elapsed:.1f}s")
+              f"val={val_loss:.4f}/{val_acc:.3f} | {elapsed:.1f}s{grad_str}")
 
         ckpt = {
             "epoch": epoch,

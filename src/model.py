@@ -44,7 +44,7 @@ class GATsigLayer(nn.Module):
         in_dim: int,
         hidden_dim: int,
         n_heads: int = 1,
-        mconst: float = -10.0,
+        mconst: float = -50.0,
         alpha: float = 0.2,
     ):
         super().__init__()
@@ -134,7 +134,7 @@ class GATsig(nn.Module):
         hidden_dim: int = 10,
         n_heads: int = 1,
         n_layers: int = 1,
-        mconst: float = -10.0,
+        mconst: float = -50.0,
         alpha: float = 0.2,
     ):
         super().__init__()

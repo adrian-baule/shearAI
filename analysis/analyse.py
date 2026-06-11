@@ -57,7 +57,7 @@ def load_model(checkpoint_path: str, device) -> GATsig:
         hidden_dim=cfg.get("hidden_dim", 10),
         n_heads=cfg.get("n_heads", 1),
         n_layers=cfg.get("n_layers", 1),
-        mconst=cfg.get("mconst", -10.0),
+        mconst=cfg.get("mconst", -50.0),
         alpha=cfg.get("alpha", 0.2),
     ).to(device)
     model.load_state_dict(ckpt["model"])
