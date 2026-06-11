@@ -67,7 +67,7 @@ if _HAS_PYG:
             mconst: float = -10.0,
             alpha: float = 0.2,
         ):
-            super().__init__(aggr="add", flow="target_to_source")
+            super().__init__(aggr="add")
             self.n_heads   = n_heads
             self.mconst    = mconst      # kept for checkpoint compatibility; unused in sparse path
             self.alpha     = alpha

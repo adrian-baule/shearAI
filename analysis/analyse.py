@@ -284,10 +284,6 @@ def cmd_attention(args):
             return
         alpha_cols = alpha_stack[i_idx, j_idx]
 
-    if len(i_idx) == 0:
-        print(f"No edges exceed threshold {args.threshold}. Try lowering --threshold.")
-        return
-
     # Build output: i, j (1-indexed), alphas, pos_i, pos_j, r_i, r_j
     pos_i  = pos_np[i_idx]                                      # (E, 2)
     pos_j  = pos_np[j_idx]                                      # (E, 2)
