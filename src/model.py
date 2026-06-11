@@ -1,5 +1,5 @@
 """
-GATsig - Graph Attention Network for shear jamming classification
+GATsig - Graph Attention Network for shear jamming classification (sparse PyG version)
 
 Architecture (multi-head, multi-layer GAT with sigma-gated attention):
   Inputs:
@@ -9,121 +9,214 @@ Architecture (multi-head, multi-layer GAT with sigma-gated attention):
 
   Per GAT layer (GATsigLayer):
     1. K parallel attention heads, each with its own W_k, a_src_k, a_tgt_k
-    2. Attention logit:  e_ij^k = LeakyReLU(a_src_k · h_i^k + a_tgt_k · h_j^k)
-    3. Mask non-contacts then sigmoid gating
-    4. Aggregation:      H'^k_i = sigmoid(A) @ H^k
+    2. For each contact edge (i,j): e_ij^k = LeakyReLU(a_src_k·H_j + a_tgt_k·H_i)
+    3. Sigmoid gating: alpha_ij = sigmoid(e_ij)
+       Non-contact edges never created → no masking needed
+    4. Aggregation: H'^k_i = sum_{j in N(i)} alpha_ij * H^k_j  (sparse matmul)
     5. Concatenate heads -> linear projection back to hidden_dim
 
   Readout (after final layer):
-    Linear(hidden_dim, 1) -> sigmoid -> per-node scores
-    Linear(N, N) -> softmax -> weighted sum -> scalar output
+    per-node: sigmoid(W_node @ h_i)  -> node_scores (N,)
+    W3: Linear(N, N) -> softmax -> weighted sum -> scalar output
 """
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+try:
+    from torch_geometric.nn import MessagePassing
+    _HAS_PYG = True
+except ImportError:
+    _HAS_PYG = False
 
-class GATsigLayer(nn.Module):
+
+def build_contact_edges(positions: torch.Tensor, radii: torch.Tensor):
     """
-    Single GAT layer with K attention heads and sigma gating.
+    Build sparse edge index for contact graph (excluding self-loops).
 
-    Each head independently projects, computes attention, and aggregates.
-    Head outputs are concatenated then projected back to hidden_dim.
-
-    Args:
-        in_dim     : input feature dimension
-        hidden_dim : output feature dimension (after head projection)
-        n_heads    : number of attention heads
-        mconst     : large negative mask constant for non-contacts
-        alpha      : LeakyReLU negative slope
+    positions : (N, 2)
+    radii     : (N,)
+    returns   : edge_index (2, E)  LongTensor — row 0 = target i, row 1 = source j
     """
+    diff  = positions.unsqueeze(1) - positions.unsqueeze(0)   # (N, N, 2)
+    dist  = torch.norm(diff, dim=-1)                           # (N, N)
+    r_sum = radii.unsqueeze(1) + radii.unsqueeze(0)           # (N, N)
+    contact = (dist < r_sum) & ~torch.eye(dist.shape[0], dtype=torch.bool, device=positions.device)
+    return contact.nonzero(as_tuple=False).t().contiguous()    # (2, E)
 
-    def __init__(
-        self,
-        in_dim: int,
-        hidden_dim: int,
-        n_heads: int = 1,
-        mconst: float = -10.0,
-        alpha: float = 0.2,
-    ):
-        super().__init__()
-        self.n_heads = n_heads
-        self.mconst = mconst
-        self.alpha = alpha
-        # dimension per head before concatenation
-        self.head_dim = hidden_dim
 
-        # Per-head projection and attention parameters
-        self.W = nn.ModuleList([
-            nn.Linear(in_dim, hidden_dim, bias=False) for _ in range(n_heads)
-        ])
-        self.a_src = nn.ParameterList([
-            nn.Parameter(torch.empty(hidden_dim)) for _ in range(n_heads)
-        ])
-        self.a_tgt = nn.ParameterList([
-            nn.Parameter(torch.empty(hidden_dim)) for _ in range(n_heads)
-        ])
-
-        # Multi-head projection: only added when n_heads > 1.
-        # For n_heads=1, adoth goes directly to the caller (matching Mathematica exactly).
-        self.proj = nn.Linear(n_heads * hidden_dim, hidden_dim, bias=False) if n_heads > 1 else None
-
-        self._init_weights()
-
-    def _init_weights(self):
-        for k in range(self.n_heads):
-            nn.init.xavier_uniform_(self.W[k].weight)
-            # 1-D vectors: unsqueeze to (1, d) so xavier_uniform_ can compute fan_in/fan_out
-            nn.init.xavier_uniform_(self.a_src[k].unsqueeze(0))
-            nn.init.xavier_uniform_(self.a_tgt[k].unsqueeze(0))
-        if self.proj is not None:
-            nn.init.xavier_uniform_(self.proj.weight)
-
-    def forward(self, x: torch.Tensor, A: torch.Tensor, return_attention: bool = False):
+if _HAS_PYG:
+    class GATsigLayer(MessagePassing):
         """
-        x : (N, in_dim)
-        A : (N, N) binary contact matrix
-        return_attention : if True, also return list of (N, N) attention matrices per head
+        Single GAT layer with K attention heads and sigma gating (PyG sparse version).
 
-        returns: (N, hidden_dim)  or  ((N, hidden_dim), list[(N, N)])
+        Uses MessagePassing with aggr='add'.  For each contact edge (i->j):
+            e_ij = LeakyReLU(a_src · H_j  +  a_tgt · H_i)
+            alpha_ij = sigmoid(e_ij)
+            msg_ij = alpha_ij * H_j
+
+        Node update: h'_i = sum_{j} msg_ij
         """
-        head_outputs = []
-        attn_matrices = []
-        for k in range(self.n_heads):
-            H = self.W[k](x)                                             # (N, head_dim)
-            src_scores = (H * self.a_src[k]).sum(dim=-1)                 # (N,) H[i]·a_src
-            tgt_scores = (H * self.a_tgt[k]).sum(dim=-1)                 # (N,) H[i]·a_tgt
-            # outersum[i,j] = H[j]·a_src + H[i]·a_tgt  (matches Mathematica left/right reshape)
-            e = src_scores.unsqueeze(0) + tgt_scores.unsqueeze(1)        # (N, N)
-            e = F.leaky_relu(e, negative_slope=self.alpha)
-            masked = A * e + (1.0 - A) * self.mconst                     # (N, N)
-            attn = torch.sigmoid(masked)                                  # (N, N)
-            head_outputs.append(attn @ H)                                 # (N, head_dim)
+
+        def __init__(
+            self,
+            in_dim: int,
+            hidden_dim: int,
+            n_heads: int = 1,
+            mconst: float = -10.0,
+            alpha: float = 0.2,
+        ):
+            super().__init__(aggr="add", flow="target_to_source")
+            self.n_heads   = n_heads
+            self.mconst    = mconst      # kept for checkpoint compatibility; unused in sparse path
+            self.alpha     = alpha
+            self.head_dim  = hidden_dim
+
+            self.W = nn.ModuleList([
+                nn.Linear(in_dim, hidden_dim, bias=False) for _ in range(n_heads)
+            ])
+            self.a_src = nn.ParameterList([
+                nn.Parameter(torch.empty(hidden_dim)) for _ in range(n_heads)
+            ])
+            self.a_tgt = nn.ParameterList([
+                nn.Parameter(torch.empty(hidden_dim)) for _ in range(n_heads)
+            ])
+
+            self.proj = nn.Linear(n_heads * hidden_dim, hidden_dim, bias=False) if n_heads > 1 else None
+            self._init_weights()
+
+        def _init_weights(self):
+            for k in range(self.n_heads):
+                nn.init.xavier_uniform_(self.W[k].weight)
+                nn.init.xavier_uniform_(self.a_src[k].unsqueeze(0))
+                nn.init.xavier_uniform_(self.a_tgt[k].unsqueeze(0))
+            if self.proj is not None:
+                nn.init.xavier_uniform_(self.proj.weight)
+
+        def forward(self, x: torch.Tensor, edge_index: torch.Tensor, return_attention: bool = False):
+            """
+            x          : (N, in_dim)
+            edge_index : (2, E)  — row 0 = target i, row 1 = source j
+            returns    : (N, hidden_dim)  or  ((N, hidden_dim), list[(E,) per head])
+            """
+            head_outputs = []
+            attn_per_head = []
+
+            for k in range(self.n_heads):
+                H = self.W[k](x)                                          # (N, head_dim)
+
+                # per-node attention scalars
+                src_scores = (H * self.a_src[k]).sum(dim=-1)              # (N,)  H·a_src
+                tgt_scores = (H * self.a_tgt[k]).sum(dim=-1)              # (N,)  H·a_tgt
+
+                # e_ij = LeakyReLU( src_scores[j] + tgt_scores[i] )
+                i_nodes = edge_index[0]   # target
+                j_nodes = edge_index[1]   # source
+                e = src_scores[j_nodes] + tgt_scores[i_nodes]             # (E,)
+                e = F.leaky_relu(e, negative_slope=self.alpha)
+                attn = torch.sigmoid(e)                                    # (E,)  alpha_ij
+
+                # aggregate: h'_i = sum_j  alpha_ij * H_j
+                agg = self.propagate(edge_index, x=H, attn=attn)          # (N, head_dim)
+                head_outputs.append(agg)
+                if return_attention:
+                    attn_per_head.append(attn)
+
+            if self.n_heads == 1:
+                out = head_outputs[0]
+            else:
+                out = self.proj(torch.cat(head_outputs, dim=-1))
+
             if return_attention:
-                attn_matrices.append(attn)
+                return out, attn_per_head
+            return out
 
-        if self.n_heads == 1:
-            out = head_outputs[0]                                         # (N, hidden_dim) — no proj, matches Mathematica
-        else:
-            out = self.proj(torch.cat(head_outputs, dim=-1))              # (N, hidden_dim)
+        def message(self, x_j: torch.Tensor, attn: torch.Tensor) -> torch.Tensor:
+            # x_j : (E, head_dim)  — feature of source node j for each edge
+            # attn: (E,)
+            return attn.unsqueeze(-1) * x_j                               # (E, head_dim)
 
-        if return_attention:
-            return out, attn_matrices
-        return out
+else:
+    # Fallback dense implementation when PyG is not installed
+    class GATsigLayer(nn.Module):
+        """Dense fallback (identical to original) when torch_geometric is unavailable."""
+
+        def __init__(
+            self,
+            in_dim: int,
+            hidden_dim: int,
+            n_heads: int = 1,
+            mconst: float = -10.0,
+            alpha: float = 0.2,
+        ):
+            super().__init__()
+            self.n_heads  = n_heads
+            self.mconst   = mconst
+            self.alpha    = alpha
+            self.head_dim = hidden_dim
+
+            self.W = nn.ModuleList([
+                nn.Linear(in_dim, hidden_dim, bias=False) for _ in range(n_heads)
+            ])
+            self.a_src = nn.ParameterList([
+                nn.Parameter(torch.empty(hidden_dim)) for _ in range(n_heads)
+            ])
+            self.a_tgt = nn.ParameterList([
+                nn.Parameter(torch.empty(hidden_dim)) for _ in range(n_heads)
+            ])
+            self.proj = nn.Linear(n_heads * hidden_dim, hidden_dim, bias=False) if n_heads > 1 else None
+            self._init_weights()
+
+        def _init_weights(self):
+            for k in range(self.n_heads):
+                nn.init.xavier_uniform_(self.W[k].weight)
+                nn.init.xavier_uniform_(self.a_src[k].unsqueeze(0))
+                nn.init.xavier_uniform_(self.a_tgt[k].unsqueeze(0))
+            if self.proj is not None:
+                nn.init.xavier_uniform_(self.proj.weight)
+
+        def forward(self, x, edge_index_or_A, return_attention=False):
+            # edge_index_or_A accepted as dense (N,N) matrix in fallback mode
+            A = edge_index_or_A
+            head_outputs, attn_matrices = [], []
+            for k in range(self.n_heads):
+                H = self.W[k](x)
+                src_scores = (H * self.a_src[k]).sum(dim=-1)
+                tgt_scores = (H * self.a_tgt[k]).sum(dim=-1)
+                e = src_scores.unsqueeze(0) + tgt_scores.unsqueeze(1)
+                e = F.leaky_relu(e, negative_slope=self.alpha)
+                masked = A * e + (1.0 - A) * self.mconst
+                attn = torch.sigmoid(masked)
+                head_outputs.append(attn @ H)
+                if return_attention:
+                    attn_matrices.append(attn)
+            if self.n_heads == 1:
+                out = head_outputs[0]
+            else:
+                out = self.proj(torch.cat(head_outputs, dim=-1))
+            if return_attention:
+                return out, attn_matrices
+            return out
 
 
 class GATsig(nn.Module):
     """
-    Multi-head, multi-layer GAT with sigmoid attention gating.
+    Multi-head, multi-layer GATsig with sparse PyG attention.
+
+    When PyG is available the contact graph is stored as edge_index (2×E)
+    and attention is computed only on contact edges — O(E) instead of O(N²).
+
+    W2 is replaced by a per-node linear (hidden_dim → 1) so the readout is
+    also independent of n_nodes and works for variable-size graphs.
 
     Args:
-        n_nodes    : number of particles (fixed per dataset, default 2000)
+        n_nodes    : number of particles (used only for W3 dense readout)
         fdim       : input feature dimension (default 5)
         hidden_dim : hidden dimension per layer (default 10)
         n_heads    : number of attention heads per layer (default 1)
         n_layers   : number of stacked GAT layers (default 1)
-        mconst     : large negative mask constant for non-contacts (default -10)
+        mconst     : large negative mask constant (kept for compat, unused in sparse path)
         alpha      : LeakyReLU negative slope (default 0.2)
     """
 
@@ -138,9 +231,9 @@ class GATsig(nn.Module):
         alpha: float = 0.2,
     ):
         super().__init__()
-        self.n_nodes = n_nodes
+        self.n_nodes    = n_nodes
+        self.hidden_dim = hidden_dim
 
-        # Stack of GAT layers; first layer takes fdim, rest take hidden_dim
         dims = [fdim] + [hidden_dim] * n_layers
         self.layers = nn.ModuleList([
             GATsigLayer(
@@ -153,31 +246,24 @@ class GATsig(nn.Module):
             for i in range(n_layers)
         ])
 
-        # Readout MLP — matches Mathematica LinearLayer[nnodes, Input->{nnodes,newfdim}]
-        # W2 flattens the full (N, hidden_dim) node matrix and maps globally to N outputs
-        self.W2 = nn.Linear(n_nodes * hidden_dim, n_nodes, bias=True)
-        self.W3 = nn.Linear(n_nodes, n_nodes, bias=True)
+        # Readout
+        # W_node: per-node projection  (hidden_dim → 1),  replaces the dense W2 flatten
+        # W3: global dense re-weighting over N node scores (same as original)
+        self.W_node = nn.Linear(hidden_dim, 1, bias=True)
+        self.W3     = nn.Linear(n_nodes, n_nodes, bias=True)
 
-        nn.init.xavier_uniform_(self.W2.weight)
-        nn.init.zeros_(self.W2.bias)
+        nn.init.xavier_uniform_(self.W_node.weight)
+        nn.init.zeros_(self.W_node.bias)
         nn.init.xavier_uniform_(self.W3.weight)
         nn.init.zeros_(self.W3.bias)
 
     # ------------------------------------------------------------------
     @staticmethod
     def build_contact_matrix(positions: torch.Tensor, radii: torch.Tensor) -> torch.Tensor:
-        """
-        Returns binary contact matrix A ∈ {0,1}^(N×N).
-        A_ij = 1 if particle i and j are in contact (distance < sum of radii).
-        Diagonal is zeroed (no self-contact).
-
-        positions : (N, 2)
-        radii     : (N,)
-        returns   : (N, N) float
-        """
-        diff = positions.unsqueeze(1) - positions.unsqueeze(0)           # (N, N, 2)
-        dist = torch.norm(diff, dim=-1)                                   # (N, N)
-        r_sum = radii.unsqueeze(1) + radii.unsqueeze(0)                  # (N, N)
+        """Dense contact matrix — kept for compatibility with analysis scripts."""
+        diff    = positions.unsqueeze(1) - positions.unsqueeze(0)
+        dist    = torch.norm(diff, dim=-1)
+        r_sum   = radii.unsqueeze(1) + radii.unsqueeze(0)
         contact = (dist < r_sum).float()
         contact = contact * (1 - torch.eye(contact.shape[0], device=positions.device))
         return contact
@@ -185,35 +271,39 @@ class GATsig(nn.Module):
     # ------------------------------------------------------------------
     def forward(
         self,
-        features: torch.Tensor,   # (N, fdim)
-        positions: torch.Tensor,  # (N, 2)
-        radii: torch.Tensor,      # (N,)
+        features:  torch.Tensor,   # (N, fdim)
+        positions: torch.Tensor,   # (N, 2)
+        radii:     torch.Tensor,   # (N,)
         return_attention: bool = False,
     ):
         """
         Returns scalar logit (pre-sigmoid) for DST probability.
 
-        If return_attention=True, also returns a list of attention matrices,
-        one per layer, each being a list of (N, N) tensors (one per head).
-        Shape: [ layer0_heads[(N,N), ...], layer1_heads[(N,N), ...], ... ]
+        If return_attention=True also returns attention data:
+          - PyG path  : list[layer] of list[head] of (E,) edge-weight tensors
+          - dense path: list[layer] of list[head] of (N,N) matrices
         """
-        A = self.build_contact_matrix(positions, radii)                  # (N, N)
+        if _HAS_PYG:
+            edge_index = build_contact_edges(positions, radii)  # (2, E)
+            graph_repr = edge_index
+        else:
+            graph_repr = self.build_contact_matrix(positions, radii)
 
         h = features
         all_attns = []
         for layer in self.layers:
             if return_attention:
-                h, attn_matrices = layer(h, A, return_attention=True)
-                all_attns.append(attn_matrices)
+                h, attn = layer(h, graph_repr, return_attention=True)
+                all_attns.append(attn)
             else:
-                h = layer(h, A)                                          # (N, hidden_dim)
-            h = torch.sigmoid(h)                                         # nlin: matches Mathematica adoth->nlin
+                h = layer(h, graph_repr)
+            h = torch.sigmoid(h)                                 # nlin: matches Mathematica adoth->nlin
 
-        # Readout: W2 flattens (N, hidden_dim) -> N, then nlin2/W3/softmax2/dotprob
-        node_scores = torch.sigmoid(self.W2(h.flatten()))                # nlin2: (N,)
-        weights     = F.softmax(self.W3(node_scores), dim=0)             # softmax2: (N,)
-        scalar      = (weights * node_scores).sum()                      # dotprob: scalar
+        # Readout: per-node score then global weighted sum
+        node_scores = torch.sigmoid(self.W_node(h).squeeze(-1))  # (N,)  replaces W2 + nlin2
+        weights     = F.softmax(self.W3(node_scores), dim=0)     # (N,)  softmax2
+        scalar      = (weights * node_scores).sum()              # scalar dotprob
 
         if return_attention:
             return scalar, all_attns
-        return scalar   # wrap in sigmoid externally for probability
+        return scalar

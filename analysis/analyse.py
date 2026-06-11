@@ -240,7 +240,9 @@ def cmd_attention(args):
         feats.to(device), pos.to(device), rad.to(device),
         return_attention=True,
     )
-    # all_attns: list[layer] of list[head] of (N, N) tensors
+    # all_attns: list[layer] of list[head] of:
+    #   - (E,) edge-weight tensors  (PyG sparse path)
+    #   - (N, N) dense matrices     (fallback dense path)
 
     n_layers = len(all_attns)
     n_heads  = len(all_attns[0])
@@ -248,22 +250,45 @@ def cmd_attention(args):
     # Build column header names: L{l}H{k} for each layer/head combination
     head_names = [f"L{l}H{k}" for l in range(n_layers) for k in range(n_heads)]
 
-    # Stack all alpha values into (N, N, n_layers*n_heads) numpy array
-    alpha_stack = np.stack(
-        [all_attns[l][k].cpu().numpy() for l in range(n_layers) for k in range(n_heads)],
-        axis=-1,
-    )  # (N, N, n_cols)
+    # Detect whether attention is sparse (1-D per-edge) or dense (2-D N×N)
+    first_attn = all_attns[0][0]
+    sparse_mode = (first_attn.dim() == 1)
 
-    # Keep only edges where max alpha across heads/layers exceeds threshold
-    max_alpha = alpha_stack.max(axis=-1)                        # (N, N)
-    i_idx, j_idx = np.where(max_alpha > args.threshold)
+    if sparse_mode:
+        # Rebuild edge_index to know which (i, j) each edge weight belongs to
+        from model import build_contact_edges
+        edge_index = build_contact_edges(pos.to(device), rad.to(device))  # (2, E)
+        i_idx = edge_index[0].cpu().numpy()
+        j_idx = edge_index[1].cpu().numpy()
+        # alpha_cols: (E, n_heads*n_layers)
+        alpha_cols = np.stack(
+            [all_attns[l][k].cpu().numpy() for l in range(n_layers) for k in range(n_heads)],
+            axis=-1,
+        )
+        max_alpha = alpha_cols.max(axis=-1)
+        mask = max_alpha > args.threshold
+        if mask.sum() == 0:
+            print(f"No edges exceed threshold {args.threshold}. Try lowering --threshold.")
+            return
+        i_idx, j_idx, alpha_cols = i_idx[mask], j_idx[mask], alpha_cols[mask]
+    else:
+        # Dense path: stack into (N, N, n_cols) and filter by threshold
+        alpha_stack = np.stack(
+            [all_attns[l][k].cpu().numpy() for l in range(n_layers) for k in range(n_heads)],
+            axis=-1,
+        )
+        max_alpha = alpha_stack.max(axis=-1)
+        i_idx, j_idx = np.where(max_alpha > args.threshold)
+        if len(i_idx) == 0:
+            print(f"No edges exceed threshold {args.threshold}. Try lowering --threshold.")
+            return
+        alpha_cols = alpha_stack[i_idx, j_idx]
 
     if len(i_idx) == 0:
         print(f"No edges exceed threshold {args.threshold}. Try lowering --threshold.")
         return
 
     # Build output: i, j (1-indexed), alphas, pos_i, pos_j, r_i, r_j
-    alpha_cols = alpha_stack[i_idx, j_idx]                      # (E, n_heads*n_layers)
     pos_i  = pos_np[i_idx]                                      # (E, 2)
     pos_j  = pos_np[j_idx]                                      # (E, 2)
     r_i    = rad_np[i_idx, np.newaxis]                          # (E, 1)
