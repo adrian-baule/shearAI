@@ -90,7 +90,8 @@ def train_one_epoch(model, loader, optimizer, criterion, device, scaler):
             for b in range(feats.shape[0]):
                 logits.append(model(feats[b], pos[b], rad[b]))
             logits = torch.stack(logits)
-            loss   = criterion(logits, labels)
+        # BCELoss requires float32 — compute outside autocast
+        loss = criterion(logits.float(), labels.float())
 
         if use_amp:
             scaler.scale(loss).backward()
@@ -120,7 +121,7 @@ def evaluate(model, loader, criterion, device):
         labels = labels.to(device, non_blocking=True)
 
         logits = torch.stack([model(feats[b], pos[b], rad[b]) for b in range(feats.shape[0])])
-        loss   = criterion(logits, labels)
+        loss = criterion(logits.float(), labels.float())
 
         total_loss += loss.item()
         pred = (logits.float() > 0.5).float()
