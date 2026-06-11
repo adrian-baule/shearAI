@@ -51,6 +51,7 @@ def parse_args():
     p.add_argument("--n_packings",   type=int, default=100, help="Number of packings per file")
     p.add_argument("--batch_size",   type=int, default=1,  help="Batch size (default 1; increase only if all packings have the same N)")
     p.add_argument("--no_amp",       action="store_true", help="Disable mixed-precision training")
+    p.add_argument("--no_checkpoints", action="store_true", help="Skip saving best.pt and last.pt (weights CSV still saved)")
     p.add_argument("--patience",     type=int, default=10,
                    help="Early stopping: stop after this many epochs with no val_loss improvement. 0 = disabled.")
     return p.parse_args()
@@ -222,20 +223,30 @@ def main():
               f"val={val_loss:.4f}/{val_acc:.3f} | "
               f"∇asrc={asrc_gnorm:.2e}  ∇atarg={atarg_gnorm:.2e} | {elapsed:.1f}s")
 
-        ckpt = {
-            "epoch": epoch,
-            "model": model.state_dict(),
-            "optimizer": optimizer.state_dict(),
-            "best_val_loss": best_val_loss,
-        }
-        if scaler:
-            ckpt["scaler"] = scaler.state_dict()
-        torch.save(ckpt, output_dir / "last.pt")
+        if not args.no_checkpoints:
+            ckpt = {
+                "epoch": epoch,
+                "model": model.state_dict(),
+                "optimizer": optimizer.state_dict(),
+                "best_val_loss": best_val_loss,
+            }
+            if scaler:
+                ckpt["scaler"] = scaler.state_dict()
+            torch.save(ckpt, output_dir / "last.pt")
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             epochs_no_improve = 0
-            torch.save(ckpt, output_dir / "best.pt")
+            if not args.no_checkpoints:
+                ckpt = {
+                    "epoch": epoch,
+                    "model": model.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                    "best_val_loss": best_val_loss,
+                }
+                if scaler:
+                    ckpt["scaler"] = scaler.state_dict()
+                torch.save(ckpt, output_dir / "best.pt")
             print(f"  → New best val_loss: {best_val_loss:.4f}")
             _save_weights_csv(model, output_dir)
         else:
