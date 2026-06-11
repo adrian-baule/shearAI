@@ -76,7 +76,7 @@ def run_inference(model, packings, device):
     for packing in packings:
         feats, pos, rad = packing_to_tensors(packing)
         out = model(feats.to(device), pos.to(device), rad.to(device))
-        probs.append(torch.sigmoid(out).item())
+        probs.append(out.item())
     return np.array(probs)
 
 
@@ -130,7 +130,7 @@ def cmd_evaluate(args):
     probs, labels = [], []
     for feats, pos, rad, label in dataset:
         out  = model(feats.to(device), pos.to(device), rad.to(device))
-        probs.append(torch.sigmoid(out).item())
+        probs.append(out.item())
         labels.append(int(label.item()))
     probs  = np.array(probs)
     labels = np.array(labels)

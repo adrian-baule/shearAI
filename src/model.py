@@ -217,4 +217,4 @@ class GATsig(nn.Module):
 
         if return_attention:
             return scalar, all_attns
-        return scalar   # wrap in sigmoid externally for probability
+        return scalar   # already a probability in (0, 1); use BCELoss, not BCEWithLogitsLoss

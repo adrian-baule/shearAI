@@ -101,7 +101,7 @@ def train_one_epoch(model, loader, optimizer, criterion, device, scaler):
             optimizer.step()
 
         total_loss += loss.item()
-        pred = (torch.sigmoid(logits.detach().float()) > 0.5).float()
+        pred = (logits.detach().float() > 0.5).float()
         correct += (pred == labels).sum().item()
         total += labels.numel()
 
@@ -123,7 +123,7 @@ def evaluate(model, loader, criterion, device):
         loss   = criterion(logits, labels)
 
         total_loss += loss.item()
-        pred = (torch.sigmoid(logits.float()) > 0.5).float()
+        pred = (logits.float() > 0.5).float()
         correct += (pred == labels).sum().item()
         total += labels.numel()
 
@@ -184,7 +184,7 @@ def main():
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
 
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
-    criterion = nn.BCEWithLogitsLoss()
+    criterion = nn.BCELoss()
     scaler    = GradScaler() if use_amp else None
 
     start_epoch   = 0
