@@ -56,6 +56,21 @@ def parse_args():
     return p.parse_args()
 
 
+def _asrc_atarg_grad_norms(model: GATsig):
+    """Return mean gradient norms for a_src and a_tgt across all layers/heads."""
+    src_norms, tgt_norms = [], []
+    for layer in model.layers:
+        for k in range(layer.n_heads):
+            if layer.a_src[k].grad is not None:
+                src_norms.append(layer.a_src[k].grad.norm().item())
+            if layer.a_tgt[k].grad is not None:
+                tgt_norms.append(layer.a_tgt[k].grad.norm().item())
+    return (
+        sum(src_norms) / len(src_norms) if src_norms else float("nan"),
+        sum(tgt_norms) / len(tgt_norms) if tgt_norms else float("nan"),
+    )
+
+
 def train_one_epoch(model, loader, optimizer, criterion, device, scaler):
     model.train()
     total_loss, correct, total = 0.0, 0, 0
@@ -199,23 +214,13 @@ def main():
             val_acc=round(val_acc, 4),
             time_s=round(elapsed, 1),
         )
+        asrc_gnorm, atarg_gnorm = _asrc_atarg_grad_norms(model)
+        row["asrc_grad_norm"]  = round(asrc_gnorm,  8)
+        row["atarg_grad_norm"] = round(atarg_gnorm, 8)
         log.append(row)
-        # gradient norms for a_src / a_tgt across all layers and heads
-        asrc_norms = [
-            p.grad.norm().item() for layer in model.layers
-            for p in layer.a_src if p.grad is not None
-        ]
-        atgt_norms = [
-            p.grad.norm().item() for layer in model.layers
-            for p in layer.a_tgt if p.grad is not None
-        ]
-        grad_str = ""
-        if asrc_norms:
-            grad_str = (f"  |grad| a_src={[f'{v:.4f}' for v in asrc_norms]} "
-                        f"a_tgt={[f'{v:.4f}' for v in atgt_norms]}")
-
         print(f"Epoch {epoch:03d} | train={train_loss:.4f}/{train_acc:.3f} "
-              f"val={val_loss:.4f}/{val_acc:.3f} | {elapsed:.1f}s{grad_str}")
+              f"val={val_loss:.4f}/{val_acc:.3f} | "
+              f"∇asrc={asrc_gnorm:.2e}  ∇atarg={atarg_gnorm:.2e} | {elapsed:.1f}s")
 
         ckpt = {
             "epoch": epoch,
