@@ -114,9 +114,43 @@ class GATsigLayer(nn.Module):
         return out
 
 
+class GlobalAttentionPooling(nn.Module):
+    """
+    GlobalAttention graph pooling (Li et al., 2016).
+
+    For each node i with hidden vector h_i:
+        gate_i  = sigmoid( W_gate · h_i + b_gate )        scalar gate
+        feat_i  = W_feat · h_i + b_feat                   feature projection (pool_dim,)
+        r       = sum_i  gate_i * feat_i                   graph-level vector (pool_dim,)
+        output  = sigmoid( W_out · r + b_out )             scalar probability
+
+    Args:
+        hidden_dim : dimension of incoming node features
+        pool_dim   : intermediate graph-level representation size (default 1)
+    """
+
+    def __init__(self, hidden_dim: int, pool_dim: int = 1):
+        super().__init__()
+        self.gate_nn = nn.Linear(hidden_dim, 1,        bias=True)
+        self.feat_nn = nn.Linear(hidden_dim, pool_dim, bias=True)
+        self.out_nn  = nn.Linear(pool_dim,   1,        bias=True)
+
+        nn.init.xavier_uniform_(self.gate_nn.weight); nn.init.zeros_(self.gate_nn.bias)
+        nn.init.xavier_uniform_(self.feat_nn.weight); nn.init.zeros_(self.feat_nn.bias)
+        nn.init.xavier_uniform_(self.out_nn.weight);  nn.init.zeros_(self.out_nn.bias)
+
+    def forward(self, h: torch.Tensor):
+        """h : (N, hidden_dim)  →  scalar probability in (0, 1)"""
+        gates  = torch.sigmoid(self.gate_nn(h))          # (N, 1)
+        feats  = self.feat_nn(h)                          # (N, pool_dim)
+        r      = (gates * feats).sum(dim=0, keepdim=True) # (1, pool_dim)
+        return torch.sigmoid(self.out_nn(r)).squeeze()    # scalar
+
+
 class GATsig(nn.Module):
     """
-    Multi-head, multi-layer GAT with sigmoid attention gating.
+    Multi-head, multi-layer GAT with sigmoid attention gating and
+    GlobalAttention graph pooling readout.
 
     Args:
         n_nodes    : number of particles (fixed per dataset, default 2000)
@@ -124,8 +158,9 @@ class GATsig(nn.Module):
         hidden_dim : hidden dimension per layer (default 10)
         n_heads    : number of attention heads per layer (default 1)
         n_layers   : number of stacked GAT layers (default 1)
-        mconst     : large negative mask constant for non-contacts (default -10)
+        mconst     : large negative mask constant for non-contacts (default -50)
         alpha      : LeakyReLU negative slope (default 0.2)
+        pool_dim   : GlobalAttention intermediate dimension (default 1)
     """
 
     def __init__(
@@ -137,6 +172,7 @@ class GATsig(nn.Module):
         n_layers: int = 1,
         mconst: float = -50.0,
         alpha: float = 0.2,
+        pool_dim: int = 1,
     ):
         super().__init__()
         self.n_nodes = n_nodes
@@ -154,16 +190,8 @@ class GATsig(nn.Module):
             for i in range(n_layers)
         ])
 
-        # Readout — matches Mathematica nlin2 / W3 / softmax2 / dotprob
-        # W2: per-node linear (hidden_dim → 1), applied independently to each node
-        # W3: global dense re-weighting (n_nodes → n_nodes)
-        self.W2 = nn.Linear(hidden_dim, 1, bias=True)
-        self.W3 = nn.Linear(n_nodes, n_nodes, bias=True)
-
-        nn.init.xavier_uniform_(self.W2.weight)
-        nn.init.zeros_(self.W2.bias)
-        nn.init.xavier_uniform_(self.W3.weight)
-        nn.init.zeros_(self.W3.bias)
+        # GlobalAttention readout
+        self.pooling = GlobalAttentionPooling(hidden_dim, pool_dim)
 
     # ------------------------------------------------------------------
     @staticmethod
@@ -211,11 +239,9 @@ class GATsig(nn.Module):
                 h = layer(h, A)                                          # (N, hidden_dim)
             h = torch.sigmoid(h)                                         # nlin: matches Mathematica adoth->nlin
 
-        # Readout: W2 per-node (hidden_dim → 1), then nlin2/W3/softmax2/dotprob
-        node_scores = torch.sigmoid(self.W2(h).squeeze(-1))              # nlin2: (N,)
-        weights     = F.softmax(self.W3(node_scores), dim=0)             # softmax2: (N,)
-        scalar      = (weights * node_scores).sum()                      # dotprob: scalar
+        # GlobalAttention readout: gated sum over nodes → scalar probability
+        scalar = self.pooling(h)                                         # scalar in (0, 1)
 
         if return_attention:
             return scalar, all_attns
-        return scalar   # already a probability in (0, 1); use BCELoss, not BCEWithLogitsLoss
+        return scalar   # probability in (0, 1); use BCELoss

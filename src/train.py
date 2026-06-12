@@ -44,6 +44,7 @@ def parse_args():
     p.add_argument("--n_layers",     type=int, default=1)
     p.add_argument("--mconst",       type=float, default=-50.0)
     p.add_argument("--alpha",        type=float, default=0.2)
+    p.add_argument("--pool_dim",     type=int,   default=1, help="GlobalAttention intermediate dimension")
     p.add_argument("--seed",         type=int, default=42)
     p.add_argument("--resume",       type=str, default=None)
     p.add_argument("--non_dst_file", type=str, default="data1.csv")
@@ -68,13 +69,13 @@ def _asrc_atarg_grad_norms(model: GATsig):
                 src_norms.append(layer.a_src[k].grad.norm().item())
             if layer.a_tgt[k].grad is not None:
                 tgt_norms.append(layer.a_tgt[k].grad.norm().item())
-    w2_norm = model.W2.weight.grad.norm().item() if model.W2.weight.grad is not None else float("nan")
-    w3_norm = model.W3.weight.grad.norm().item() if model.W3.weight.grad is not None else float("nan")
+    gate_norm = model.pooling.gate_nn.weight.grad.norm().item() if model.pooling.gate_nn.weight.grad is not None else float("nan")
+    feat_norm = model.pooling.feat_nn.weight.grad.norm().item() if model.pooling.feat_nn.weight.grad is not None else float("nan")
     return (
         sum(src_norms) / len(src_norms) if src_norms else float("nan"),
         sum(tgt_norms) / len(tgt_norms) if tgt_norms else float("nan"),
-        w2_norm,
-        w3_norm,
+        gate_norm,
+        feat_norm,
     )
 
 
@@ -143,13 +144,15 @@ def _save_weights_csv(model: GATsig, output_dir: Path):
     W     = layer.W[0].weight.detach().cpu().numpy()       # (hidden_dim, in_dim)
     asrc  = layer.a_src[0].detach().cpu().numpy()          # (hidden_dim,)
     atarg = layer.a_tgt[0].detach().cpu().numpy()          # (hidden_dim,)
-    W2    = model.W2.weight.detach().cpu().numpy()         # (1, hidden_dim)
-    W3    = model.W3.weight.detach().cpu().numpy()         # (n_nodes, n_nodes)
-    np.savetxt(output_dir / "out_W.csv",     W.T,   delimiter=",", fmt="%.10f")   # (fdim, hidden_dim)
-    np.savetxt(output_dir / "out_asrc.csv",  asrc,  delimiter=",", fmt="%.10f")
-    np.savetxt(output_dir / "out_atarg.csv", atarg, delimiter=",", fmt="%.10f")
-    np.savetxt(output_dir / "out_W2.csv",    W2,    delimiter=",", fmt="%.10f")   # (1, hidden_dim)
-    np.savetxt(output_dir / "out_W3.csv",    W3,    delimiter=",", fmt="%.10f")   # (n_nodes, n_nodes)
+    W_gate = model.pooling.gate_nn.weight.detach().cpu().numpy()  # (1, hidden_dim)
+    W_feat = model.pooling.feat_nn.weight.detach().cpu().numpy()  # (pool_dim, hidden_dim)
+    W_out  = model.pooling.out_nn.weight.detach().cpu().numpy()   # (1, pool_dim)
+    np.savetxt(output_dir / "out_W.csv",      W.T,    delimiter=",", fmt="%.10f")
+    np.savetxt(output_dir / "out_asrc.csv",   asrc,   delimiter=",", fmt="%.10f")
+    np.savetxt(output_dir / "out_atarg.csv",  atarg,  delimiter=",", fmt="%.10f")
+    np.savetxt(output_dir / "out_W_gate.csv", W_gate, delimiter=",", fmt="%.10f")  # (1, hidden_dim)
+    np.savetxt(output_dir / "out_W_feat.csv", W_feat, delimiter=",", fmt="%.10f")  # (pool_dim, hidden_dim)
+    np.savetxt(output_dir / "out_W_out.csv",  W_out,  delimiter=",", fmt="%.10f")  # (1, pool_dim)
 
 
 def main():
@@ -191,6 +194,7 @@ def main():
         n_layers=args.n_layers,
         mconst=args.mconst,
         alpha=args.alpha,
+        pool_dim=args.pool_dim,
     ).to(device)
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
 
@@ -236,13 +240,13 @@ def main():
         asrc_gnorm, atarg_gnorm, w2_gnorm, w3_gnorm = _asrc_atarg_grad_norms(model)
         row["asrc_grad_norm"]  = round(asrc_gnorm,  8)
         row["atarg_grad_norm"] = round(atarg_gnorm, 8)
-        row["W2_grad_norm"]    = round(w2_gnorm,    8)
-        row["W3_grad_norm"]    = round(w3_gnorm,    8)
+        row["gate_grad_norm"]  = round(w2_gnorm,    8)
+        row["feat_grad_norm"]  = round(w3_gnorm,    8)
         log.append(row)
         print(f"Epoch {epoch:03d} | train={train_loss:.4f}/{train_acc:.3f} "
               f"val={val_loss:.4f}/{val_acc:.3f} | "
               f"∇asrc={asrc_gnorm:.2e}  ∇atarg={atarg_gnorm:.2e} | "
-              f"∇W2={w2_gnorm:.2e}  ∇W3={w3_gnorm:.2e} | {elapsed:.1f}s")
+              f"∇gate={w2_gnorm:.2e}  ∇feat={w3_gnorm:.2e} | {elapsed:.1f}s")
 
         if not args.no_checkpoints:
             ckpt = {
