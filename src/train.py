@@ -144,15 +144,9 @@ def _save_weights_csv(model: GATsig, output_dir: Path):
     W     = layer.W[0].weight.detach().cpu().numpy()       # (hidden_dim, in_dim)
     asrc  = layer.a_src[0].detach().cpu().numpy()          # (hidden_dim,)
     atarg = layer.a_tgt[0].detach().cpu().numpy()          # (hidden_dim,)
-    W_gate = model.pooling.gate_nn.weight.detach().cpu().numpy()  # (1, hidden_dim)
-    W_feat = model.pooling.feat_nn.weight.detach().cpu().numpy()  # (pool_dim, hidden_dim)
-    W_out  = model.pooling.out_nn.weight.detach().cpu().numpy()   # (1, pool_dim)
     np.savetxt(output_dir / "out_W.csv",      W.T,    delimiter=",", fmt="%.10f")
     np.savetxt(output_dir / "out_asrc.csv",   asrc,   delimiter=",", fmt="%.10f")
     np.savetxt(output_dir / "out_atarg.csv",  atarg,  delimiter=",", fmt="%.10f")
-    np.savetxt(output_dir / "out_W_gate.csv", W_gate, delimiter=",", fmt="%.10f")  # (1, hidden_dim)
-    np.savetxt(output_dir / "out_W_feat.csv", W_feat, delimiter=",", fmt="%.10f")  # (pool_dim, hidden_dim)
-    np.savetxt(output_dir / "out_W_out.csv",  W_out,  delimiter=",", fmt="%.10f")  # (1, pool_dim)
 
 
 def main():
