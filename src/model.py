@@ -237,7 +237,7 @@ class GATsig(nn.Module):
                 all_attns.append(attn_matrices)
             else:
                 h = layer(h, A)                                          # (N, hidden_dim)
-            h = torch.sigmoid(h)                                         # nlin: matches Mathematica adoth->nlin
+            h = torch.tanh(h)                                            # nlin: avoids sigmoid saturation to 1
 
         # GlobalAttention readout: gated sum over nodes → scalar probability
         scalar = self.pooling(h)                                         # scalar in (0, 1)
