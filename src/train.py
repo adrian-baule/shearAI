@@ -70,7 +70,7 @@ def _asrc_atarg_grad_norms(model: GATsig):
             if layer.a_tgt[k].grad is not None:
                 tgt_norms.append(layer.a_tgt[k].grad.norm().item())
     w2_norm = model.W2.weight.grad.norm().item() if model.W2.weight.grad is not None else float("nan")
-    w3_norm = model.W3.weight.grad.norm().item() if model.W3.weight.grad is not None else float("nan")
+    w3_norm = model.W3_U.grad.norm().item() if model.W3_U.grad is not None else float("nan")
     return (
         sum(src_norms) / len(src_norms) if src_norms else float("nan"),
         sum(tgt_norms) / len(tgt_norms) if tgt_norms else float("nan"),
