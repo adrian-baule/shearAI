@@ -34,6 +34,8 @@ def parse_args():
     p.add_argument("--output_dir",   type=str, default="./outputs")
     p.add_argument("--epochs",       type=int, default=100)
     p.add_argument("--lr",           type=float, default=1e-4)
+    p.add_argument("--lr_attn",      type=float, default=1e-2,
+                   help="Learning rate for a_src and a_tgt (default 1e-2, larger than --lr)")
     p.add_argument("--val_fraction", type=float, default=0.2)
     p.add_argument("--n_nodes",      type=int, default=2000)
     p.add_argument("--fdim",         type=int, default=5)
@@ -188,7 +190,14 @@ def main():
     ).to(device)
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
 
-    optimizer = optim.Adam(model.parameters(), lr=args.lr)
+    attn_params = [p for layer in model.layers for p in list(layer.a_src) + list(layer.a_tgt)]
+    attn_ids    = {id(p) for p in attn_params}
+    other_params = [p for p in model.parameters() if id(p) not in attn_ids]
+    optimizer = optim.Adam([
+        {"params": other_params,  "lr": args.lr},
+        {"params": attn_params,   "lr": args.lr_attn},
+    ])
+    print(f"LR: main={args.lr}  a_src/a_tgt={args.lr_attn}")
     criterion = nn.BCELoss()
     scaler    = GradScaler() if use_amp else None
 
