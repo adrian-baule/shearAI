@@ -15,7 +15,7 @@ Architecture (multi-head, multi-layer GAT with sigma-gated attention):
     5. Concatenate heads -> linear projection back to hidden_dim
 
   Readout (after final layer):
-    Linear(hidden_dim, 1) -> sigmoid -> per-node scores
+    Linear(hidden_dim, 1) applied per node -> sigmoid -> node_scores (N,)
     Linear(N, N) -> softmax -> weighted sum -> scalar output
 """
 
@@ -154,9 +154,10 @@ class GATsig(nn.Module):
             for i in range(n_layers)
         ])
 
-        # Readout MLP — matches Mathematica LinearLayer[nnodes, Input->{nnodes,newfdim}]
-        # W2 flattens the full (N, hidden_dim) node matrix and maps globally to N outputs
-        self.W2 = nn.Linear(n_nodes * hidden_dim, n_nodes, bias=True)
+        # Readout — matches Mathematica nlin2 / W3 / softmax2 / dotprob
+        # W2: per-node linear (hidden_dim → 1), applied independently to each node
+        # W3: global dense re-weighting (n_nodes → n_nodes)
+        self.W2 = nn.Linear(hidden_dim, 1, bias=True)
         self.W3 = nn.Linear(n_nodes, n_nodes, bias=True)
 
         nn.init.xavier_uniform_(self.W2.weight)
@@ -210,8 +211,8 @@ class GATsig(nn.Module):
                 h = layer(h, A)                                          # (N, hidden_dim)
             h = torch.sigmoid(h)                                         # nlin: matches Mathematica adoth->nlin
 
-        # Readout: W2 flattens (N, hidden_dim) -> N, then nlin2/W3/softmax2/dotprob
-        node_scores = torch.sigmoid(self.W2(h.flatten()))                # nlin2: (N,)
+        # Readout: W2 per-node (hidden_dim → 1), then nlin2/W3/softmax2/dotprob
+        node_scores = torch.sigmoid(self.W2(h).squeeze(-1))              # nlin2: (N,)
         weights     = F.softmax(self.W3(node_scores), dim=0)             # softmax2: (N,)
         scalar      = (weights * node_scores).sum()                      # dotprob: scalar
 
