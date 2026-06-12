@@ -58,7 +58,7 @@ def parse_args():
 
 
 def _asrc_atarg_grad_norms(model: GATsig):
-    """Return mean gradient norms for a_src and a_tgt across all layers/heads."""
+    """Return mean gradient norms for a_src/a_tgt and W2/W3."""
     src_norms, tgt_norms = [], []
     for layer in model.layers:
         for k in range(layer.n_heads):
@@ -66,9 +66,13 @@ def _asrc_atarg_grad_norms(model: GATsig):
                 src_norms.append(layer.a_src[k].grad.norm().item())
             if layer.a_tgt[k].grad is not None:
                 tgt_norms.append(layer.a_tgt[k].grad.norm().item())
+    w2_norm = model.W2.weight.grad.norm().item() if model.W2.weight.grad is not None else float("nan")
+    w3_norm = model.W3.weight.grad.norm().item() if model.W3.weight.grad is not None else float("nan")
     return (
         sum(src_norms) / len(src_norms) if src_norms else float("nan"),
         sum(tgt_norms) / len(tgt_norms) if tgt_norms else float("nan"),
+        w2_norm,
+        w3_norm,
     )
 
 
@@ -216,13 +220,16 @@ def main():
             val_acc=round(val_acc, 4),
             time_s=round(elapsed, 1),
         )
-        asrc_gnorm, atarg_gnorm = _asrc_atarg_grad_norms(model)
+        asrc_gnorm, atarg_gnorm, w2_gnorm, w3_gnorm = _asrc_atarg_grad_norms(model)
         row["asrc_grad_norm"]  = round(asrc_gnorm,  8)
         row["atarg_grad_norm"] = round(atarg_gnorm, 8)
+        row["W2_grad_norm"]    = round(w2_gnorm,    8)
+        row["W3_grad_norm"]    = round(w3_gnorm,    8)
         log.append(row)
         print(f"Epoch {epoch:03d} | train={train_loss:.4f}/{train_acc:.3f} "
               f"val={val_loss:.4f}/{val_acc:.3f} | "
-              f"∇asrc={asrc_gnorm:.2e}  ∇atarg={atarg_gnorm:.2e} | {elapsed:.1f}s")
+              f"∇asrc={asrc_gnorm:.2e}  ∇atarg={atarg_gnorm:.2e} | "
+              f"∇W2={w2_gnorm:.2e}  ∇W3={w3_gnorm:.2e} | {elapsed:.1f}s")
 
         if not args.no_checkpoints:
             ckpt = {
