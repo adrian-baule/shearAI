@@ -124,8 +124,9 @@ class GATsig(nn.Module):
         hidden_dim : hidden dimension per layer (default 10)
         n_heads    : number of attention heads per layer (default 1)
         n_layers   : number of stacked GAT layers (default 1)
-        mconst     : large negative mask constant for non-contacts (default -10)
+        mconst     : large negative mask constant for non-contacts (default -50)
         alpha      : LeakyReLU negative slope (default 0.2)
+        W3_rank    : rank of low-rank W3 factorisation (default 10)
     """
 
     def __init__(
@@ -137,9 +138,11 @@ class GATsig(nn.Module):
         n_layers: int = 1,
         mconst: float = -50.0,
         alpha: float = 0.2,
+        W3_rank: int = 10,
     ):
         super().__init__()
         self.n_nodes = n_nodes
+        self.W3_rank = W3_rank
 
         # Stack of GAT layers; first layer takes fdim, rest take hidden_dim
         dims = [fdim] + [hidden_dim] * n_layers
@@ -154,16 +157,18 @@ class GATsig(nn.Module):
             for i in range(n_layers)
         ])
 
-        # Readout — matches Mathematica nlin2 / W3 / softmax2 / dotprob
+        # Readout
         # W2: per-node linear (hidden_dim → 1), applied independently to each node
-        # W3: global dense re-weighting (n_nodes → n_nodes)
-        self.W2 = nn.Linear(hidden_dim, 1, bias=True)
-        self.W3 = nn.Linear(n_nodes, n_nodes, bias=True)
+        # W3: low-rank re-weighting (n_nodes → n_nodes) via W3_U @ W3_V^T + bias
+        self.W2    = nn.Linear(hidden_dim, 1, bias=True)
+        self.W3_U  = nn.Parameter(torch.empty(n_nodes, W3_rank))
+        self.W3_V  = nn.Parameter(torch.empty(n_nodes, W3_rank))
+        self.W3_b  = nn.Parameter(torch.zeros(n_nodes))
 
         nn.init.xavier_uniform_(self.W2.weight)
         nn.init.zeros_(self.W2.bias)
-        nn.init.xavier_uniform_(self.W3.weight)
-        nn.init.zeros_(self.W3.bias)
+        nn.init.xavier_uniform_(self.W3_U)
+        nn.init.xavier_uniform_(self.W3_V)
 
     # ------------------------------------------------------------------
     @staticmethod
@@ -209,11 +214,13 @@ class GATsig(nn.Module):
                 all_attns.append(attn_matrices)
             else:
                 h = layer(h, A)                                          # (N, hidden_dim)
-            h = torch.sigmoid(h)                                         # nlin: matches Mathematica adoth->nlin
+            h = torch.tanh(h)                                            # nlin
 
         # Readout: W2 per-node (hidden_dim → 1), then nlin2/W3/softmax2/dotprob
-        node_scores = torch.sigmoid(self.W2(h).squeeze(-1))              # nlin2: (N,)
-        weights     = F.softmax(self.W3(node_scores), dim=0)             # softmax2: (N,)
+        # W3 applied as low-rank: (W3_U @ W3_V^T) @ x + W3_b
+        node_scores = torch.tanh(self.W2(h).squeeze(-1))                 # nlin2: (N,)
+        w3x         = self.W3_U @ (self.W3_V.t() @ node_scores) + self.W3_b
+        weights     = F.softmax(w3x, dim=0)                              # softmax2: (N,)
         scalar      = (weights * node_scores).sum()                      # dotprob: scalar
 
         if return_attention:

@@ -43,6 +43,7 @@ def parse_args():
     p.add_argument("--n_heads",      type=int, default=1)
     p.add_argument("--n_layers",     type=int, default=1)
     p.add_argument("--mconst",       type=float, default=-50.0)
+    p.add_argument("--W3_rank",      type=int,   default=10, help="Rank of low-rank W3 factorisation")
     p.add_argument("--alpha",        type=float, default=0.2)
     p.add_argument("--seed",         type=int, default=42)
     p.add_argument("--resume",       type=str, default=None)
@@ -144,12 +145,16 @@ def _save_weights_csv(model: GATsig, output_dir: Path):
     asrc  = layer.a_src[0].detach().cpu().numpy()          # (hidden_dim,)
     atarg = layer.a_tgt[0].detach().cpu().numpy()          # (hidden_dim,)
     W2    = model.W2.weight.detach().cpu().numpy()         # (1, hidden_dim)
-    W3    = model.W3.weight.detach().cpu().numpy()         # (n_nodes, n_nodes)
+    W3_U  = model.W3_U.detach().cpu().numpy()             # (n_nodes, W3_rank)
+    W3_V  = model.W3_V.detach().cpu().numpy()             # (n_nodes, W3_rank)
+    W3_b  = model.W3_b.detach().cpu().numpy()             # (n_nodes,)
     np.savetxt(output_dir / "out_W.csv",     W.T,   delimiter=",", fmt="%.10f")   # (fdim, hidden_dim)
     np.savetxt(output_dir / "out_asrc.csv",  asrc,  delimiter=",", fmt="%.10f")
     np.savetxt(output_dir / "out_atarg.csv", atarg, delimiter=",", fmt="%.10f")
     np.savetxt(output_dir / "out_W2.csv",    W2,    delimiter=",", fmt="%.10f")   # (1, hidden_dim)
-    np.savetxt(output_dir / "out_W3.csv",    W3,    delimiter=",", fmt="%.10f")   # (n_nodes, n_nodes)
+    np.savetxt(output_dir / "out_W3_U.csv",  W3_U,  delimiter=",", fmt="%.10f")  # (n_nodes, W3_rank)
+    np.savetxt(output_dir / "out_W3_V.csv",  W3_V,  delimiter=",", fmt="%.10f")  # (n_nodes, W3_rank)
+    np.savetxt(output_dir / "out_W3_b.csv",  W3_b,  delimiter=",", fmt="%.10f")  # (n_nodes,)
 
 
 def main():
@@ -191,6 +196,7 @@ def main():
         n_layers=args.n_layers,
         mconst=args.mconst,
         alpha=args.alpha,
+        W3_rank=args.W3_rank,
     ).to(device)
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
 
