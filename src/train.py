@@ -276,6 +276,11 @@ def main():
         with open(output_dir / "log.json", "w") as f:
             json.dump(log, f, indent=2)
 
+        with open(output_dir / "log.csv", "w") as f:
+            f.write(",".join(log[0].keys()) + "\n")
+            for row in log:
+                f.write(",".join(str(v) for v in row.values()) + "\n")
+
         if args.patience > 0 and epochs_no_improve >= args.patience:
             print(f"Early stopping: val_loss did not improve for {args.patience} epochs.")
             break
