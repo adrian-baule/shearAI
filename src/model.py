@@ -218,10 +218,10 @@ class GATsig(nn.Module):
 
         # Readout: W2 per-node (hidden_dim → 1), then nlin2/W3/softmax2/dotprob
         # W3 applied as low-rank: (W3_U @ W3_V^T) @ x + W3_b
-        node_scores = torch.tanh(self.W2(h).squeeze(-1))                 # nlin2: (N,)
+        node_scores = torch.tanh(self.W2(h).squeeze(-1))                 # nlin2: (N,) in (-1,1)
         w3x         = self.W3_U @ (self.W3_V.t() @ node_scores) + self.W3_b
         weights     = F.softmax(w3x, dim=0)                              # softmax2: (N,)
-        scalar      = (weights * node_scores).sum()                      # dotprob: scalar
+        scalar      = torch.sigmoid((weights * node_scores).sum())       # map to (0,1) for BCELoss
 
         if return_attention:
             return scalar, all_attns
