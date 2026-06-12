@@ -143,7 +143,7 @@ class GlobalAttentionPooling(nn.Module):
         """h : (N, hidden_dim)  →  scalar probability in (0, 1)"""
         gates  = torch.sigmoid(self.gate_nn(h))          # (N, 1)
         feats  = self.feat_nn(h)                          # (N, pool_dim)
-        r      = (gates * feats).sum(dim=0, keepdim=True) # (1, pool_dim)
+        r      = (gates * feats).mean(dim=0, keepdim=True) # (1, pool_dim)
         return torch.sigmoid(self.out_nn(r)).squeeze()    # scalar
 
 
