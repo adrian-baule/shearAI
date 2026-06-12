@@ -138,14 +138,18 @@ def evaluate(model, loader, criterion, device):
 
 
 def _save_weights_csv(model: GATsig, output_dir: Path):
-    """Save W, asrc, atarg for the first GAT layer/head to CSV (Mathematica-compatible)."""
+    """Save GAT and readout weights to CSV (Mathematica-compatible)."""
     layer = model.layers[0]
-    W     = layer.W[0].weight.detach().cpu().numpy()       # (hidden_dim, in_dim) -> transpose to (in_dim, hidden_dim)
+    W     = layer.W[0].weight.detach().cpu().numpy()       # (hidden_dim, in_dim)
     asrc  = layer.a_src[0].detach().cpu().numpy()          # (hidden_dim,)
     atarg = layer.a_tgt[0].detach().cpu().numpy()          # (hidden_dim,)
+    W2    = model.W2.weight.detach().cpu().numpy()         # (1, hidden_dim)
+    W3    = model.W3.weight.detach().cpu().numpy()         # (n_nodes, n_nodes)
     np.savetxt(output_dir / "out_W.csv",     W.T,   delimiter=",", fmt="%.10f")   # (fdim, hidden_dim)
     np.savetxt(output_dir / "out_asrc.csv",  asrc,  delimiter=",", fmt="%.10f")
     np.savetxt(output_dir / "out_atarg.csv", atarg, delimiter=",", fmt="%.10f")
+    np.savetxt(output_dir / "out_W2.csv",    W2,    delimiter=",", fmt="%.10f")   # (1, hidden_dim)
+    np.savetxt(output_dir / "out_W3.csv",    W3,    delimiter=",", fmt="%.10f")   # (n_nodes, n_nodes)
 
 
 def main():
