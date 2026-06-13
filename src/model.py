@@ -177,8 +177,11 @@ class GATsig(nn.Module):
         super().__init__()
         self.n_nodes = n_nodes
 
-        # Normalise raw input features (velocities etc. have large, varying scale)
-        self.input_norm = nn.BatchNorm1d(fdim)
+        # Normalise raw input features (velocities etc. have large, varying scale).
+        # track_running_stats=False: always use per-packing statistics (consistent in train and eval).
+        # Standard BatchNorm accumulates running stats over training packings, which misrepresents
+        # val packings that have different feature distributions (DST vs non-DST at different phi).
+        self.input_norm = nn.BatchNorm1d(fdim, track_running_stats=False)
 
         # Stack of GAT layers; first layer takes fdim, rest take hidden_dim
         dims = [fdim] + [hidden_dim] * n_layers
