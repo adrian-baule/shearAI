@@ -74,10 +74,10 @@ class GATsigLayer(nn.Module):
     def _init_weights(self):
         for k in range(self.n_heads):
             nn.init.xavier_uniform_(self.W[k].weight)
-            # a_src / a_tgt initialised as zeros to match Mathematica NetInitialize.
-            # Xavier init saturates sigmoid(e) from the start → zero gradients.
-            nn.init.zeros_(self.a_src[k])
-            nn.init.zeros_(self.a_tgt[k])
+            # Small normal init for a_src/a_tgt: zero init gives identical node features
+            # (uniform GAT attention) → gate_nn sees same input for every node → uniform softmax.
+            nn.init.normal_(self.a_src[k], std=0.01)
+            nn.init.normal_(self.a_tgt[k], std=0.01)
         if self.proj is not None:
             nn.init.xavier_uniform_(self.proj.weight)
 
@@ -143,7 +143,7 @@ class GlobalAttentionPooling(nn.Module):
         """h : (N, hidden_dim)  →  scalar probability in (0, 1)"""
         gates  = F.softmax(self.gate_nn(h), dim=0)        # (N, 1) sums to 1 across nodes
         feats  = self.feat_nn(h)                          # (N, pool_dim)
-        r      = (gates * feats).mean(dim=0, keepdim=True) # (1, pool_dim)
+        r      = (gates * feats).sum(dim=0, keepdim=True) # (1, pool_dim) — softmax already normalises
         return torch.sigmoid(self.out_nn(r)).squeeze()    # scalar
 
 
