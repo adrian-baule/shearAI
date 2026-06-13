@@ -177,6 +177,9 @@ class GATsig(nn.Module):
         super().__init__()
         self.n_nodes = n_nodes
 
+        # Normalise raw input features (velocities etc. have large, varying scale)
+        self.input_norm = nn.BatchNorm1d(fdim)
+
         # Stack of GAT layers; first layer takes fdim, rest take hidden_dim
         dims = [fdim] + [hidden_dim] * n_layers
         self.layers = nn.ModuleList([
@@ -229,7 +232,7 @@ class GATsig(nn.Module):
         """
         A = self.build_contact_matrix(positions, radii)                  # (N, N)
 
-        h = features
+        h = self.input_norm(features)                                    # (N, fdim) — zero-mean, unit-var per feature
         all_attns = []
         for layer in self.layers:
             if return_attention:
