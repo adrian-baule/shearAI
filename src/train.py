@@ -53,6 +53,8 @@ def parse_args():
     p.add_argument("--stride",       type=int, default=10,  help="Take every n-th packing")
     p.add_argument("--n_packings",   type=int, default=100, help="Number of packings per file")
     p.add_argument("--batch_size",   type=int, default=1,  help="Batch size (default 1; increase only if all packings have the same N)")
+    p.add_argument("--weight_decay",  type=float, default=1e-4, help="L2 weight decay for Adam (default 1e-4)")
+    p.add_argument("--grad_clip",     type=float, default=1.0,  help="Max gradient norm for clipping (0 = disabled)")
     p.add_argument("--no_amp",       action="store_true", help="Disable mixed-precision training")
     p.add_argument("--no_checkpoints", action="store_true", help="Skip saving best.pt and last.pt (weights CSV still saved)")
     p.add_argument("--patience",     type=int, default=10,
@@ -79,7 +81,7 @@ def _asrc_atarg_grad_norms(model: GATsig):
     )
 
 
-def train_one_epoch(model, loader, optimizer, criterion, device, scaler):
+def train_one_epoch(model, loader, optimizer, criterion, device, scaler, grad_clip=1.0):
     model.train()
     total_loss, correct, total = 0.0, 0, 0
     use_amp = scaler is not None
@@ -102,10 +104,15 @@ def train_one_epoch(model, loader, optimizer, criterion, device, scaler):
 
         if use_amp:
             scaler.scale(loss).backward()
+            if grad_clip > 0:
+                scaler.unscale_(optimizer)
+                nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
             scaler.step(optimizer)
             scaler.update()
         else:
             loss.backward()
+            if grad_clip > 0:
+                nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
             optimizer.step()
 
         total_loss += loss.item()
@@ -198,8 +205,8 @@ def main():
     optimizer = optim.Adam([
         {"params": other_params,  "lr": args.lr},
         {"params": attn_params,   "lr": args.lr_attn},
-    ])
-    print(f"LR: main={args.lr}  a_src/a_tgt={args.lr_attn}")
+    ], weight_decay=args.weight_decay)
+    print(f"LR: main={args.lr}  a_src/a_tgt={args.lr_attn}  weight_decay={args.weight_decay}  grad_clip={args.grad_clip}")
     criterion = nn.BCELoss()
     scaler    = GradScaler() if use_amp else None
 
@@ -219,7 +226,7 @@ def main():
     epochs_no_improve = 0
     for epoch in range(start_epoch, args.epochs):
         t0 = time.time()
-        train_loss, train_acc = train_one_epoch(model, train_loader, optimizer, criterion, device, scaler)
+        train_loss, train_acc = train_one_epoch(model, train_loader, optimizer, criterion, device, scaler, args.grad_clip)
         val_loss,   val_acc   = evaluate(model, val_loader, criterion, device)
         elapsed = time.time() - t0
 
