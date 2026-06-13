@@ -97,7 +97,8 @@ class GATsigLayer(nn.Module):
             tgt_scores = (H * self.a_tgt[k]).sum(dim=-1)                 # (N,) H[i]·a_tgt
             # outersum[i,j] = H[j]·a_src + H[i]·a_tgt  (matches Mathematica left/right reshape)
             e = src_scores.unsqueeze(0) + tgt_scores.unsqueeze(1)        # (N, N)
-            e = F.leaky_relu(e, negative_slope=self.alpha)
+            # No LeakyReLU: non-contacts are already suppressed by mconst=-50.
+            # LeakyReLU would bias e>=0 for contacts → sigmoid always >=0.5 → saturates to 1.
             masked = A * e + (1.0 - A) * self.mconst                     # (N, N)
             attn = torch.sigmoid(masked)                                  # (N, N)
             head_outputs.append(attn @ H)                                 # (N, head_dim)
